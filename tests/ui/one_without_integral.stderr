@@ -1,0 +1,13 @@
+error[E0599]: the associated function or constant `ONE` exists for struct `Decimal<UTerm, UInt<UInt<UTerm, B1>, B0>, i8>`, but its trait bounds were not satisfied
+ --> tests/ui/one_without_integral.rs:7:33
+  |
+7 |   let _one = Decimal::<U0, U2>::ONE;
+  |                                 ^^^ associated function or constant cannot be called on `Decimal<UTerm, UInt<UInt<UTerm, B1>, B0>, i8>` due to unsatisfied trait bounds
+  |
+ ::: $CARGO/typenum-$VERSION/src/uint.rs
+  |
+  | pub struct UTerm;
+  | ---------------- doesn't satisfy `UTerm: arbitrary_numbers::typenum::NonZero`
+  |
+  = note: the following trait bounds were not satisfied:
+          `UTerm: arbitrary_numbers::typenum::NonZero`

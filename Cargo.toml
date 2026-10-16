@@ -1,29 +1,30 @@
 [package]
-name = "template-rs"
+name = "arbitrary-numbers"
 version = "0.0.0"
-edition = "2021"
-repository = "https://github.com/al8n/template-rs"
-homepage = "https://github.com/al8n/template-rs"
-documentation = "https://docs.rs/template-rs"
-description = "A template for creating Rust open-source repo on GitHub"
+edition = "2024"
+repository = "https://github.com/al8n/arbitrary-numbers"
+documentation = "https://docs.rs/arbitrary-numbers"
+description = "Exact fixed-point decimal numbers with type-level digit counts and selectable native storage, for no_std without allocation"
 license = "MIT OR Apache-2.0"
-rust-version = "1.73"
+keywords = ["decimal", "fixed-point", "exact", "typenum", "no-std"]
+categories = ["mathematics", "no-std"]
+
+[lib]
+name = "arbitrary_numbers"
 
 [[bench]]
 path = "benches/foo.rs"
 name = "foo"
 harness = false
 
-[features]
-default = ["std"]
-alloc = []
-std = []
-
 [dependencies]
+typenum = { version = "1.20", features = ["const-generics"] }
 
 [dev-dependencies]
 criterion = "0.5"
-tempfile = "3"
+num-bigint = "0.5"
+proptest = { version = "1", default-features = false, features = ["std"] }
+trybuild = "1"
 
 [profile.bench]
 opt-level = 3
@@ -40,8 +41,12 @@ all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
 
 [lints.rust]
-rust_2018_idioms = "warn"
+rust_2018_idioms = { level = "warn", priority = -1 }
 single_use_lifetimes = "warn"
+unsafe_op_in_unsafe_fn = "deny"
 unexpected_cfgs = { level = "warn", check-cfg = [
   'cfg(all_tests)',
 ] }
+
+[lints.clippy]
+undocumented_unsafe_blocks = "deny"

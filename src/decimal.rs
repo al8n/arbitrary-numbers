@@ -1,0 +1,405 @@
+//! Fixed-point decimal numbers.
+
+use core::{
+  cmp::Ordering,
+  fmt,
+  hash::{Hash, Hasher},
+  marker::PhantomData,
+  ops::Add,
+};
+
+use typenum::Sum;
+
+pub use error::{ConvertError, ParseError, ParseErrorKind};
+
+use crate::{
+  int,
+  layout::{DigitCount, Layout, SealedLayout, SealedStorage, Storage, Widen},
+};
+
+mod error;
+mod format;
+mod native;
+mod parse;
+
+#[cfg(test)]
+mod tests;
+
+/// An exact fixed-point decimal number with at most `Integral` integer digits and exactly
+/// `Fraction` fraction digits, stored as a signed integer coefficient of type `Repr`.
+///
+/// The value is `c / 10^Fraction`, where the coefficient `c` is the integer stored in `Repr` and
+/// `|c| <= 10^(Integral + Fraction) - 1`. The range is symmetric ([`MIN`](Self::MIN) is `-MAX`),
+/// and there is no NaN, infinity or negative zero. The type corresponds to SQL
+/// `NUMERIC(Integral + Fraction, Fraction)`. Because the number of fraction digits is part of the
+/// type, every value has exactly one coefficient, and equality, ordering and hashing compare
+/// coefficients.
+///
+/// `Integral` and `Fraction` are [`typenum`] numbers such as `U8` or `U<8>`. `Repr` defaults to
+/// the smallest signed integer that holds `Integral + Fraction` digits (see [`DigitCount`]); a
+/// wider one can be named explicitly. The type has the size, alignment and ABI of `Repr`.
+///
+/// ```
+/// use arbitrary_numbers::{
+///   Decimal,
+///   typenum::{U8, U10, U12},
+/// };
+///
+/// type Price = Decimal<U10, U8>; // 18 digits, stored in an `i64`
+/// type Quantity = Decimal<U12, U8>; // 20 digits, stored in an `i128`
+/// type WidePrice = Decimal<U10, U8, i128>; // 18 digits in an explicitly chosen `i128`
+///
+/// assert_eq!(size_of::<Price>(), 8);
+/// assert_eq!(size_of::<Quantity>(), 16);
+/// assert_eq!(size_of::<WidePrice>(), 16);
+/// ```
+///
+/// A combination that does not fit is rejected during type checking wherever the type is used:
+/// zero digits, more than 38 digits, or a `Repr` too small for `Integral + Fraction` digits.
+///
+/// ```compile_fail
+/// use arbitrary_numbers::{
+///   Decimal,
+///   typenum::{U8, U10},
+/// };
+///
+/// fn store(price: Decimal<U10, U8, i32>) {} // 18 digits do not fit in an `i32`
+/// ```
+///
+/// Types with different `Repr` are distinct; [`widen`](Self::widen) and
+/// [`try_convert`](Self::try_convert) convert between decimal types. Generic code names `Repr` and
+/// repeats the bound `(I, F): Layout<R>` (see [`Layout`]); the default `Repr` is meant for
+/// concrete types.
+///
+/// # Operations
+///
+/// Every operation is exact: it returns the exact result or reports failure, and nothing rounds,
+/// truncates or wraps. The operators `+`, `-`, `*` and `/` are not implemented; use
+/// [`checked_add`](Self::checked_add), [`checked_sub`](Self::checked_sub) and
+/// [`exact_mul`](Self::exact_mul). Negation always succeeds because the range is symmetric, so
+/// [`Neg`](core::ops::Neg) is implemented.
+///
+/// Methods whose behavior depends only on the storage are `const fn`, generated for each storage,
+/// so values can be computed at compile time:
+///
+/// ```
+/// use arbitrary_numbers::{
+///   Decimal,
+///   typenum::{U8, U10},
+/// };
+///
+/// type Price = Decimal<U10, U8>;
+///
+/// const TICK: Price = match Price::parse("0.01") {
+///   Ok(tick) => tick,
+///   Err(_) => panic!("invalid tick"),
+/// };
+/// const TWO_TICKS: Option<Price> = TICK.checked_add(TICK);
+///
+/// assert_eq!(TWO_TICKS, Price::from_repr(2_000_000));
+/// assert_eq!(Price::MAX.checked_add(TICK), None);
+/// ```
+///
+/// # Text
+///
+/// [`parse`](Self::parse) and [`FromStr`](core::str::FromStr) accept
+/// `["-"] 1*DIGIT ["." 1*DIGIT]` in ASCII. Fraction digits beyond `Fraction` are accepted only
+/// when they are zero; anything else is an error, never a rounded value.
+///
+/// [`Display`](fmt::Display) writes the shortest exact form: an optional `-`, the integral part
+/// without leading zeros (at least one digit), then `.` and the fraction digits without trailing
+/// zeros, omitted when they are all zero. It never uses exponent notation, and the text depends
+/// only on the value, not on `Repr` or the build configuration. [`Debug`](fmt::Debug) writes the
+/// same text. Text written for one type parses back into any type with at least as many integral
+/// and fraction digits.
+///
+/// The width, fill, alignment, `+` and `0` flags behave as they do for integers. The precision is
+/// the minimum number of fraction digits: shorter fractions are padded with zeros, even beyond
+/// `Fraction`.
+///
+/// <div class="warning">
+///
+/// Precision never rounds or truncates. Unlike floating-point formatting, `{:.1}` writes `1.25`
+/// as `1.25`, not `1.2` or `1.3`.
+///
+/// </div>
+///
+/// ```
+/// use arbitrary_numbers::{
+///   Decimal,
+///   typenum::{U4, U6},
+/// };
+///
+/// type Amount = Decimal<U6, U4>;
+///
+/// let amount: Amount = "-001.2500".parse()?;
+/// assert_eq!(amount.to_string(), "-1.25");
+/// assert_eq!(format!("{amount:.3}"), "-1.250");
+/// assert_eq!(format!("{amount:.1}"), "-1.25");
+/// assert_eq!(format!("{amount:>8}"), "   -1.25");
+/// assert_eq!(format!("{amount:08.3}"), "-001.250");
+/// assert_eq!(format!("{:+}", amount.abs()), "+1.25");
+/// # Ok::<(), arbitrary_numbers::ParseError>(())
+/// ```
+#[repr(transparent)]
+pub struct Decimal<Integral, Fraction, Repr = <Sum<Integral, Fraction> as DigitCount>::Storage>
+where
+  (Integral, Fraction): Layout<Repr>,
+{
+  repr: Repr,
+  _digits: PhantomData<(Integral, Fraction)>,
+}
+
+impl<I, F, R> Decimal<I, F, R>
+where
+  (I, F): Layout<R>,
+{
+  const INTEGRAL: u32 = <(I, F) as SealedLayout<R>>::INTEGRAL;
+  const FRACTION: u32 = <(I, F) as SealedLayout<R>>::FRACTION;
+  const DIGITS: u32 = <(I, F) as SealedLayout<R>>::DIGITS;
+
+  /// Wraps a coefficient that satisfies `|repr| <= 10^DIGITS - 1`.
+  const fn from_coeff(repr: R) -> Self {
+    Self {
+      repr,
+      _digits: PhantomData,
+    }
+  }
+}
+
+impl<I, F, R> Decimal<I, F, R>
+where
+  R: Storage,
+  (I, F): Layout<R>,
+{
+  /// Multiplies two decimals exactly.
+  ///
+  /// The result has `Integral + I2` integral digits and `Fraction + F2` fraction digits, stored
+  /// in the smallest storage for its digits, so the product always fits and is never rounded.
+  /// A product type with more than 38 digits fails to compile.
+  ///
+  /// ```
+  /// use arbitrary_numbers::{
+  ///   Decimal,
+  ///   typenum::{U8, U10, U12, U16, U22},
+  /// };
+  ///
+  /// let price: Decimal<U10, U8> = "64250.5".parse()?;
+  /// let quantity: Decimal<U12, U8> = "-0.0015".parse()?;
+  ///
+  /// let notional: Decimal<U22, U16> = price.exact_mul(quantity);
+  /// assert_eq!(notional.to_string(), "-96.37575");
+  /// # Ok::<(), arbitrary_numbers::ParseError>(())
+  /// ```
+  #[must_use]
+  pub fn exact_mul<I2, F2, R2>(self, rhs: Decimal<I2, F2, R2>) -> Decimal<Sum<I, I2>, Sum<F, F2>>
+  where
+    R2: Storage,
+    (I2, F2): Layout<R2>,
+    I: Add<I2>,
+    F: Add<F2>,
+    Sum<I, I2>: Add<Sum<F, F2>>,
+    Sum<Sum<I, I2>, Sum<F, F2>>: DigitCount,
+    (Sum<I, I2>, Sum<F, F2>): Layout<<Sum<Sum<I, I2>, Sum<F, F2>> as DigitCount>::Storage>,
+  {
+    // Both coefficients have at most 38 digits in total, so the product is below 10^38 < 2^127.
+    let product = int::i128::mul(self.repr.to_i128(), rhs.repr.to_i128());
+    Decimal::from_coeff(SealedStorage::from_i128(product))
+  }
+
+  /// Converts to a type with at least as many integral and fraction digits, and any storage that
+  /// holds them. Never fails.
+  ///
+  /// Converting to fewer integral or fraction digits fails to compile; use
+  /// [`try_convert`](Self::try_convert) instead.
+  ///
+  /// ```
+  /// use arbitrary_numbers::{
+  ///   Decimal,
+  ///   typenum::{U2, U4, U8, U10},
+  /// };
+  ///
+  /// let small: Decimal<U2, U4> = "-12.5".parse()?;
+  /// let wide: Decimal<U10, U8, i128> = small.widen();
+  /// assert_eq!(wide.repr(), -1_250_000_000);
+  /// # Ok::<(), arbitrary_numbers::ParseError>(())
+  /// ```
+  #[must_use]
+  pub fn widen<I2, F2, R2>(self) -> Decimal<I2, F2, R2>
+  where
+    R2: Storage,
+    (I2, F2): Layout<R2>,
+    (I, F): Widen<(I2, F2)>,
+  {
+    // `I2 >= I` and `F2 >= F`, so the scaled coefficient has at most `I2 + F2` digits.
+    let scale = Decimal::<I2, F2, R2>::FRACTION - Self::FRACTION;
+    let coeff = int::i128::mul_pow10(self.repr.to_i128(), scale);
+    Decimal::from_coeff(R2::from_i128(coeff))
+  }
+
+  /// Converts to any decimal type, failing instead of losing digits.
+  ///
+  /// # Errors
+  ///
+  /// Returns [`ConvertError::OutOfRange`] if the value is outside the range of the target type,
+  /// that is, if its integral part has more than `I2` digits. Otherwise returns
+  /// [`ConvertError::Inexact`] if the target has fewer fraction digits and a dropped digit is not
+  /// zero. When both apply, the error is `OutOfRange`.
+  ///
+  /// ```
+  /// use arbitrary_numbers::{
+  ///   ConvertError, Decimal,
+  ///   typenum::{U2, U3, U4, U10},
+  /// };
+  ///
+  /// let value: Decimal<U10, U4> = "-12.5000".parse()?;
+  /// let narrow: Decimal<U2, U2> = value.try_convert().unwrap();
+  /// assert_eq!(narrow.to_string(), "-12.5");
+  ///
+  /// let too_large: Decimal<U10, U4> = "123".parse()?;
+  /// assert_eq!(
+  ///   too_large.try_convert::<U2, U3, i32>(),
+  ///   Err(ConvertError::OutOfRange)
+  /// );
+  ///
+  /// let precise: Decimal<U10, U4> = "1.2345".parse()?;
+  /// assert_eq!(
+  ///   precise.try_convert::<U2, U2, i16>(),
+  ///   Err(ConvertError::Inexact)
+  /// );
+  /// # Ok::<(), arbitrary_numbers::ParseError>(())
+  /// ```
+  pub fn try_convert<I2, F2, R2>(self) -> Result<Decimal<I2, F2, R2>, ConvertError>
+  where
+    R2: Storage,
+    (I2, F2): Layout<R2>,
+  {
+    let from = Self::FRACTION;
+    let to = Decimal::<I2, F2, R2>::FRACTION;
+    let max = int::i128::max_magnitude(Decimal::<I2, F2, R2>::DIGITS);
+    let coeff = self.repr.to_i128();
+    let converted = if to >= from {
+      match int::i128::checked_mul_pow10(coeff, to - from) {
+        Some(scaled) if within(scaled, max) => scaled,
+        _ => return Err(ConvertError::OutOfRange),
+      }
+    } else {
+      // The truncated quotient is within `max` exactly when the value's integral part has at
+      // most `I2` digits, so range is decided before exactness.
+      let (quotient, remainder) = int::i128::div_rem_pow10(coeff, from - to);
+      if !within(quotient, max) {
+        return Err(ConvertError::OutOfRange);
+      }
+      if !int::i128::is_zero(remainder) {
+        return Err(ConvertError::Inexact);
+      }
+      quotient
+    };
+    Ok(Decimal::from_coeff(R2::from_i128(converted)))
+  }
+}
+
+/// Returns `true` if `|value| <= max`, for `max >= 0`.
+const fn within(value: i128, max: i128) -> bool {
+  int::i128::le(int::i128::neg(max), value) && int::i128::le(value, max)
+}
+
+impl<I, F, R> Clone for Decimal<I, F, R>
+where
+  R: Storage,
+  (I, F): Layout<R>,
+{
+  #[inline]
+  fn clone(&self) -> Self {
+    *self
+  }
+}
+
+impl<I, F, R> Copy for Decimal<I, F, R>
+where
+  R: Storage,
+  (I, F): Layout<R>,
+{
+}
+
+impl<I, F, R> PartialEq for Decimal<I, F, R>
+where
+  R: Storage,
+  (I, F): Layout<R>,
+{
+  #[inline]
+  fn eq(&self, other: &Self) -> bool {
+    self.repr == other.repr
+  }
+}
+
+impl<I, F, R> Eq for Decimal<I, F, R>
+where
+  R: Storage,
+  (I, F): Layout<R>,
+{
+}
+
+impl<I, F, R> PartialOrd for Decimal<I, F, R>
+where
+  R: Storage,
+  (I, F): Layout<R>,
+{
+  #[inline]
+  fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+    Some(self.cmp(other))
+  }
+}
+
+impl<I, F, R> Ord for Decimal<I, F, R>
+where
+  R: Storage,
+  (I, F): Layout<R>,
+{
+  #[inline]
+  fn cmp(&self, other: &Self) -> Ordering {
+    self.repr.compare(other.repr)
+  }
+}
+
+impl<I, F, R> Hash for Decimal<I, F, R>
+where
+  R: Storage,
+  (I, F): Layout<R>,
+{
+  #[inline]
+  fn hash<H: Hasher>(&self, state: &mut H) {
+    self.repr.hash(state);
+  }
+}
+
+impl<I, F, R> fmt::Display for Decimal<I, F, R>
+where
+  R: Storage,
+  (I, F): Layout<R>,
+{
+  /// Writes the shortest exact form, honoring width, fill, alignment, `+`, `0` and precision as
+  /// described on [`Decimal`]. Precision never rounds or truncates.
+  fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    let mut buf = [0; int::DIGIT_BUF_LEN];
+    let start = self.repr.write_digits(&mut buf);
+    format::write(
+      f,
+      self.repr.is_negative(),
+      &buf[start..],
+      Self::FRACTION as usize,
+    )
+  }
+}
+
+impl<I, F, R> fmt::Debug for Decimal<I, F, R>
+where
+  R: Storage,
+  (I, F): Layout<R>,
+{
+  /// Writes the same text as [`Display`](fmt::Display).
+  #[inline]
+  fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fmt::Display::fmt(self, f)
+  }
+}
