@@ -121,10 +121,15 @@ mod tests;
 ///
 /// # Text
 ///
-/// [`parse`](Self::parse) and [`FromStr`](core::str::FromStr) accept
-/// `["-"] 1*DIGIT ["." 1*DIGIT]` in ASCII, without the `-` for an unsigned `Repr`. Fraction digits
-/// beyond `Fraction` are accepted only when they are zero; anything else is an error, never a
-/// rounded value.
+/// [`parse`](Self::parse) and [`FromStr`](core::str::FromStr) accept ASCII text with an optional
+/// sign, point and exponent, and `_` separators as in Rust literals: the numeric strings of the
+/// General Decimal Arithmetic specification and every form that [`f64`] parses, such as `-1.5`,
+/// `+.5`, `5.`, `2.5E-3` and `1_000`. An unsigned `Repr` rejects a leading `-`. Infinity and NaN
+/// are recognized and reported as [`NotFinite`](crate::ParseErrorKind::NotFinite), because a
+/// decimal is always finite. The value must fit exactly: once the exponent has moved the point,
+/// digits beyond `Integral` and `Fraction` are accepted only when they are leading or trailing
+/// zeros; anything else is an error, never a rounded value. See [`parse`](Self::parse) for the
+/// grammar.
 ///
 /// [`Display`](fmt::Display) writes the shortest exact form: an optional `-`, the integral part
 /// without leading zeros (at least one digit), then `.` and the fraction digits without trailing
@@ -153,6 +158,7 @@ mod tests;
 /// type Amount = Decimal<U6, U4>;
 ///
 /// let amount: Amount = "-001.2500".parse()?;
+/// assert_eq!(amount, "-1_25e-2".parse()?);
 /// assert_eq!(amount.to_string(), "-1.25");
 /// assert_eq!(format!("{amount:.3}"), "-1.250");
 /// assert_eq!(format!("{amount:.1}"), "-1.25");

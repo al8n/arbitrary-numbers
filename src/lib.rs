@@ -29,8 +29,9 @@
 //! ```
 //!
 //! Every operation is exact: it returns the exact result or reports failure, and nothing rounds,
-//! truncates or wraps. Parsing accepts plain decimal text only and rejects digits that do not fit,
-//! and formatting writes the shortest exact text. See [`Decimal`] for the details.
+//! truncates or wraps. Parsing accepts decimal and exponent notation with `_` separators,
+//! including every form that `f64` parses, and rejects infinity, NaN and digits that do not fit;
+//! formatting writes the shortest exact text. See [`Decimal`] for the details.
 //!
 //! # `typenum`
 //!

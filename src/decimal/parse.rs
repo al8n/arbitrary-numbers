@@ -1,29 +1,28 @@
 use super::{ParseError, ParseErrorKind};
 
-/// Positions of the digits that a valid input contributes to the coefficient.
+/// Where a valid finite input keeps the digits of its coefficient.
 pub(super) struct Digits {
   /// Whether the input starts with `-`.
   pub(super) negative: bool,
-  /// Start of the integral digits, after any leading zeros.
-  pub(super) integral_start: usize,
-  /// End of the integral digits.
-  pub(super) integral_end: usize,
-  /// Start of the fraction digits.
-  pub(super) fraction_start: usize,
-  /// End of the fraction digits that are kept: at most `fraction` of them.
-  pub(super) fraction_end: usize,
-  /// Number of zeros to append so that the coefficient has exactly `fraction` fraction digits.
-  pub(super) padding: u32,
+  /// Index of the first nonzero digit, or `end` if the value is zero.
+  pub(super) start: usize,
+  /// One past the index of the last nonzero digit. Bytes between `start` and `end` that are not
+  /// digits are `_` or `.`.
+  pub(super) end: usize,
+  /// The coefficient is the integer formed by the digits between `start` and `end`, times
+  /// `10^scale`.
+  pub(super) scale: u32,
 }
 
-/// Validates `input` for a decimal with `integral` integral and `fraction` fraction digits, and
-/// a sign only if `signed`.
+/// Validates `input` for a decimal with `integral` integral and `fraction` fraction digits, and a
+/// `-` sign only if `signed`, and locates the digits of its coefficient.
 ///
-/// Errors are reported in priority order: `Empty`; `InvalidSyntax` if any byte breaks
-/// `["-"] 1*DIGIT ["." 1*DIGIT]`, or if the input starts with `-` and `signed` is `false`;
-/// `OutOfRange` if the integral part has more than `integral` digits after its leading zeros;
-/// `Inexact` if a fraction digit after the first `fraction` is not `0`. Runs in linear time and
-/// constant space.
+/// The grammar is the one documented on `parse`. Errors are reported in priority order: `Empty`;
+/// `InvalidSyntax` if the whole input does not match the grammar, or if it starts with `-` and
+/// `signed` is `false`; `NotFinite` for an infinity or a NaN; `OutOfRange` if, after the exponent
+/// moves the point, the integral part has more than `integral` digits after its leading zeros;
+/// `Inexact` if a nonzero digit then falls beyond the first `fraction` fraction digits. Runs in
+/// linear time and constant space.
 pub(super) const fn scan(
   input: &[u8],
   integral: u32,
@@ -39,60 +38,164 @@ pub(super) const fn scan(
   if negative && !signed {
     return Err(ParseError::new(ParseErrorKind::InvalidSyntax));
   }
-  let mut pos = if negative { 1 } else { 0 };
+  let mut pos = if negative || input[0] == b'+' { 1 } else { 0 };
 
-  let digits_start = pos;
-  while pos < len && input[pos].is_ascii_digit() {
+  // A finite number starts with a digit or a point; anything else must be an infinity or a NaN.
+  if pos < len && !input[pos].is_ascii_digit() && input[pos] != b'.' {
+    let kind = if is_nonfinite(input, pos) {
+      ParseErrorKind::NotFinite
+    } else {
+      ParseErrorKind::InvalidSyntax
+    };
+    return Err(ParseError::new(kind));
+  }
+
+  // The mantissa. Digits are counted without the `_` and `.` among them; the significant digits
+  // run from the first to the last nonzero digit.
+  let mut digits: usize = 0;
+  let mut integral_digits = 0;
+  let mut seen_point = false;
+  // Whether a digit has started the current run, integral or fraction; only then may `_` follow.
+  let mut in_run = false;
+  let mut leading_zeros = 0;
+  let mut significant_end = 0;
+  let mut start = 0;
+  let mut end = 0;
+  while pos < len {
+    let byte = input[pos];
+    if byte.is_ascii_digit() {
+      if byte != b'0' {
+        if end == 0 {
+          leading_zeros = digits;
+          start = pos;
+        }
+        significant_end = digits + 1;
+        end = pos + 1;
+      }
+      digits += 1;
+      in_run = true;
+    } else if byte == b'.' && !seen_point {
+      integral_digits = digits;
+      seen_point = true;
+      in_run = false;
+    } else if byte != b'_' || !in_run {
+      break;
+    }
     pos += 1;
   }
-  let integral_end = pos;
-  if integral_end == digits_start {
+  if digits == 0 {
+    return Err(ParseError::new(ParseErrorKind::InvalidSyntax));
+  }
+  if !seen_point {
+    integral_digits = digits;
+  }
+
+  // The exponent saturates at `u64::MAX`. Inputs have at most `isize::MAX` bytes, so an exponent
+  // of that magnitude moves the point more than 38 places past every digit, to either side, and
+  // decides range and exactness as any larger exponent would.
+  let mut exponent: u64 = 0;
+  let mut exponent_negative = false;
+  if pos < len && (input[pos] == b'e' || input[pos] == b'E') {
+    pos += 1;
+    if pos < len && (input[pos] == b'+' || input[pos] == b'-') {
+      exponent_negative = input[pos] == b'-';
+      pos += 1;
+    }
+    let mut exponent_digits = false;
+    while pos < len {
+      let byte = input[pos];
+      if byte.is_ascii_digit() {
+        exponent = exponent
+          .saturating_mul(10)
+          .saturating_add((byte - b'0') as u64);
+        exponent_digits = true;
+      } else if byte != b'_' {
+        break;
+      }
+      pos += 1;
+    }
+    if !exponent_digits {
+      return Err(ParseError::new(ParseErrorKind::InvalidSyntax));
+    }
+  }
+  if pos < len {
     return Err(ParseError::new(ParseErrorKind::InvalidSyntax));
   }
 
-  let mut fraction_start = pos;
-  let mut fraction_end = pos;
-  if pos < len {
-    if input[pos] != b'.' {
-      return Err(ParseError::new(ParseErrorKind::InvalidSyntax));
-    }
-    pos += 1;
-    fraction_start = pos;
-    while pos < len && input[pos].is_ascii_digit() {
-      pos += 1;
-    }
-    fraction_end = pos;
-    if fraction_end == fraction_start || pos < len {
-      return Err(ParseError::new(ParseErrorKind::InvalidSyntax));
-    }
+  if end == 0 {
+    // Zero, whatever the sign and the exponent.
+    return Ok(Digits {
+      negative,
+      start,
+      end,
+      scale: 0,
+    });
   }
 
-  let mut integral_start = digits_start;
-  while integral_start < integral_end && input[integral_start] == b'0' {
-    integral_start += 1;
-  }
-  if integral_end - integral_start > integral as usize {
+  // After the exponent moves it, the point follows the first `point` digits of the mantissa, or
+  // precedes them by `-point` zeros. The integral part then has `point - leading_zeros` digits
+  // after its leading zeros, and the last nonzero digit is fraction digit
+  // `significant_end - point`. The digit counts are at most `isize::MAX` and the exponent's
+  // magnitude at most `u64::MAX`, so `i128` holds every intermediate result.
+  let exponent = if exponent_negative {
+    -(exponent as i128)
+  } else {
+    exponent as i128
+  };
+  let point = exponent + integral_digits as i128;
+  if point - leading_zeros as i128 > integral as i128 {
     return Err(ParseError::new(ParseErrorKind::OutOfRange));
   }
-
-  let mut kept_end = fraction_end;
-  if fraction_end - fraction_start > fraction as usize {
-    kept_end = fraction_start + fraction as usize;
-    let mut i = kept_end;
-    while i < fraction_end {
-      if input[i] != b'0' {
-        return Err(ParseError::new(ParseErrorKind::Inexact));
-      }
-      i += 1;
-    }
+  let scale = fraction as i128 + point - significant_end as i128;
+  if scale < 0 {
+    return Err(ParseError::new(ParseErrorKind::Inexact));
   }
-
+  // There is at least one significant digit, so `scale < integral + fraction`.
   Ok(Digits {
     negative,
-    integral_start,
-    integral_end,
-    fraction_start,
-    fraction_end: kept_end,
-    padding: fraction - (kept_end - fraction_start) as u32,
+    start,
+    end,
+    scale: scale as u32,
   })
+}
+
+/// Returns `true` if `input[start..]` is `inf`, `infinity`, or `nan` or `snan` followed by any
+/// number of digits, ignoring ASCII case. Requires `start <= input.len()`.
+const fn is_nonfinite(input: &[u8], start: usize) -> bool {
+  let len = input.len();
+  if starts_with_ignore_case(input, start, b"inf") {
+    let rest = len - start;
+    return rest == 3 || (rest == 8 && starts_with_ignore_case(input, start, b"infinity"));
+  }
+  let mut pos = start;
+  if pos < len && input[pos].eq_ignore_ascii_case(&b's') {
+    pos += 1;
+  }
+  if !starts_with_ignore_case(input, pos, b"nan") {
+    return false;
+  }
+  pos += 3;
+  while pos < len {
+    if !input[pos].is_ascii_digit() {
+      return false;
+    }
+    pos += 1;
+  }
+  true
+}
+
+/// Returns `true` if `input[start..]` starts with `word`, ignoring ASCII case. Requires
+/// `start <= input.len()`.
+const fn starts_with_ignore_case(input: &[u8], start: usize, word: &[u8]) -> bool {
+  if input.len() - start < word.len() {
+    return false;
+  }
+  let mut i = 0;
+  while i < word.len() {
+    if !input[start + i].eq_ignore_ascii_case(&word[i]) {
+      return false;
+    }
+    i += 1;
+  }
+  true
 }

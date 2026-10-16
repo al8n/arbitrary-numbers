@@ -354,44 +354,489 @@ fn parse_valid_inputs() {
 #[test]
 fn parse_rejects_invalid_syntax() {
   for input in [
+    // No digits: a lone sign or point, or an exponent alone.
     "-",
-    "+1",
-    "+0",
+    "+",
+    ".",
+    "+.",
+    "-.",
+    "e5",
+    "E5",
+    ".e5",
+    "-e5",
+    // Signs.
+    "--1",
+    "-+1",
+    "+-1",
+    "++1",
+    "1-",
+    "1+",
+    "1.5-",
+    // Whitespace, even alone; only the empty input is `Empty`.
+    " ",
+    "   ",
+    "\t",
+    "\n",
+    "\r\n",
     " 1",
     "1 ",
     "1\n",
-    "1e5",
-    "1E5",
-    "1e-2",
-    "1_0",
-    ".5",
-    "-.5",
-    "1.",
-    "-1.",
-    ".",
-    "--1",
-    "-+1",
-    "1-",
-    "1.2.3",
+    "\t1",
+    "1 000",
+    "- 1",
+    // Grouping separators, other bases and other suffixes.
     "1,5",
+    "1,000",
+    "1'000",
     "0x10",
-    "NaN",
-    "inf",
-    "-inf",
+    "0X1F",
+    "0b1",
+    "0o7",
+    "1f",
+    "1d1",
     "x",
+    "1x",
     "1.5x",
+    // Points and exponents.
+    "1.2.3",
+    "1..2",
+    "..5",
+    "1e",
+    "1E",
+    "1e+",
+    "1e-",
+    "1.e",
+    "1e5.5",
+    "1e1e1",
+    "1ee1",
+    "1e+-1",
+    "1e--1",
+    "1e 1",
+    "1 e1",
+    // Non-ASCII digits, spaces and signs.
     "\u{0}",
     "\u{ff11}",
     "1\u{ff10}",
     "\u{663}",
+    "1.\u{663}",
+    "1e\u{663}",
+    "1\u{a0}000",
+    "\u{2212}1",
   ] {
     assert_eq!(
       parse_kind::<D2x2>(input),
       Some(ParseErrorKind::InvalidSyntax),
       "input {input:?}"
     );
+    assert_eq!(
+      parse_kind::<D2x2u16>(input),
+      Some(ParseErrorKind::InvalidSyntax),
+      "input {input:?}"
+    );
   }
   assert_eq!(parse_kind::<D2x2>(""), Some(ParseErrorKind::Empty));
+  assert_eq!(parse_kind::<D2x2u16>(""), Some(ParseErrorKind::Empty));
+}
+
+#[test]
+fn parse_signs_and_points() {
+  let cases: &[(&str, i16)] = &[
+    ("+0", 0),
+    ("+1", 100),
+    ("+12.34", 1_234),
+    ("+0.01", 1),
+    ("1.", 100),
+    ("-1.", -100),
+    ("+1.", 100),
+    ("5.", 500),
+    ("00.", 0),
+    ("99.", 9_900),
+    (".5", 50),
+    ("-.5", -50),
+    ("+.5", 50),
+    (".01", 1),
+    ("-.99", -99),
+    ("-.0", 0),
+    (".000", 0),
+  ];
+  for &(input, coeff) in cases {
+    assert_eq!(
+      D2x2::parse(input).map(D2x2::repr),
+      Ok(coeff),
+      "input {input:?}"
+    );
+  }
+  assert!(!D2x2::parse("-.0").unwrap().is_negative());
+}
+
+#[test]
+fn parse_exponents() {
+  let cases: &[(&str, i16)] = &[
+    ("1e0", 100),
+    ("1E0", 100),
+    ("1e+0", 100),
+    ("1e-0", 100),
+    ("1e00", 100),
+    ("1e1", 1_000),
+    ("1E+1", 1_000),
+    ("1e-1", 10),
+    ("1e-2", 1),
+    ("-1e-2", -1),
+    ("1.e1", 1_000),
+    (".1e1", 100),
+    ("0.0001e4", 100),
+    ("1000e-3", 100),
+    ("10e-1", 100),
+    ("12.34e0", 1_234),
+    ("1234e-2", 1_234),
+    ("0.1234e2", 1_234),
+    (".001234E4", 1_234),
+    ("123400e-4", 1_234),
+    ("-9999e-2", -9_999),
+    ("9.999e1", 9_999),
+    ("0.9999E+2", 9_999),
+    ("+.5e-1", 5),
+    ("5e-2", 5),
+    ("0e0", 0),
+    ("-0e5", 0),
+    ("-0e-1", 0),
+    ("0.000e3", 0),
+  ];
+  for &(input, coeff) in cases {
+    assert_eq!(
+      D2x2::parse(input).map(D2x2::repr),
+      Ok(coeff),
+      "input {input:?}"
+    );
+  }
+  assert!(!D2x2::parse("-0e5").unwrap().is_negative());
+  assert_eq!(D5x4::parse(".5e3").map(D5x4::repr), Ok(5_000_000));
+
+  for (input, kind) in [
+    (".5e3", ParseErrorKind::OutOfRange),
+    ("1e2", ParseErrorKind::OutOfRange),
+    ("-1E2", ParseErrorKind::OutOfRange),
+    ("1000e-1", ParseErrorKind::OutOfRange),
+    ("0.1e3", ParseErrorKind::OutOfRange),
+    ("1e-3", ParseErrorKind::Inexact),
+    ("9.9999e1", ParseErrorKind::Inexact),
+    ("123.45e-1", ParseErrorKind::Inexact),
+    ("-5e-3", ParseErrorKind::Inexact),
+    // Out of range and inexact at once.
+    ("12345e-2", ParseErrorKind::OutOfRange),
+    ("1.0001e2", ParseErrorKind::OutOfRange),
+  ] {
+    assert_eq!(parse_kind::<D2x2>(input), Some(kind), "input {input:?}");
+  }
+
+  // Without integral or fraction digits.
+  assert_eq!(D0x2::parse("5e-1").map(D0x2::repr), Ok(50));
+  assert_eq!(D0x2::parse("1e-2").map(D0x2::repr), Ok(1));
+  assert_eq!(D0x2::parse("10e-3").map(D0x2::repr), Ok(1));
+  assert_eq!(parse_kind::<D0x2>("1e0"), Some(ParseErrorKind::OutOfRange));
+  assert_eq!(parse_kind::<D0x2>("1e-3"), Some(ParseErrorKind::Inexact));
+  assert_eq!(D2x0::parse("1e1").map(D2x0::repr), Ok(10));
+  assert_eq!(D2x0::parse("990e-1").map(D2x0::repr), Ok(99));
+  assert_eq!(D2x0::parse("0.5e1").map(D2x0::repr), Ok(5));
+  assert_eq!(parse_kind::<D2x0>("1e2"), Some(ParseErrorKind::OutOfRange));
+  assert_eq!(parse_kind::<D2x0>("5e-1"), Some(ParseErrorKind::Inexact));
+
+  // At the 38-digit limit.
+  assert_eq!(D38x0::parse("1e37").map(D38x0::repr), Ok(10i128.pow(37)));
+  assert_eq!(D38x0::parse(&format!("{}0e-1", nines(38))), Ok(D38x0::MAX));
+  assert_eq!(D38x0::parse(&format!("0.{}e38", nines(38))), Ok(D38x0::MAX));
+  assert_eq!(
+    parse_kind::<D38x0>("1e38"),
+    Some(ParseErrorKind::OutOfRange)
+  );
+  assert_eq!(
+    parse_kind::<D38x0>(&format!("{}e-1", nines(39))),
+    Some(ParseErrorKind::Inexact)
+  );
+  assert_eq!(D0x38::parse("1e-38").map(D0x38::repr), Ok(1));
+  assert_eq!(D0x38::parse(&format!("{}e-38", nines(38))), Ok(D0x38::MAX));
+  assert_eq!(parse_kind::<D0x38>("1e-39"), Some(ParseErrorKind::Inexact));
+  assert_eq!(
+    D19x19::parse(&format!("{}e-19", nines(38))),
+    Ok(D19x19::MAX)
+  );
+  assert_eq!(
+    D19x19::parse(&format!("-{}e-19", nines(38))),
+    Ok(D19x19::MIN)
+  );
+}
+
+#[test]
+fn parse_underscores() {
+  // After the first digit of a run, `_` may appear anywhere, also repeated or at the end; in the
+  // exponent, anywhere after the sign.
+  let cases: &[(&str, i32)] = &[
+    ("1_000.000_1", 10_000_001),
+    ("1__0", 100_000),
+    ("1_", 10_000),
+    ("1___", 10_000),
+    ("5_.5", 55_000),
+    ("1_2_3_4_5.6_7_8_9", 123_456_789),
+    ("0_0.0_0", 0),
+    ("1.0_0_", 10_000),
+    ("1_.", 10_000),
+    ("-1_.5_", -15_000),
+    ("+.5_", 5_000),
+    ("1_e1", 100_000),
+    ("1_.e1", 100_000),
+    ("1.5_e1", 150_000),
+    ("1e_1", 100_000),
+    ("1e1_", 100_000),
+    ("1e_0_1", 100_000),
+    ("1e__1__", 100_000),
+    ("1e+_1", 100_000),
+    ("1e-_1", 1_000),
+    ("1E-0_1", 1_000),
+  ];
+  for &(input, coeff) in cases {
+    assert_eq!(
+      D5x4::parse(input).map(D5x4::repr),
+      Ok(coeff),
+      "input {input:?}"
+    );
+  }
+  assert_eq!(
+    D19x19::parse("1e_1_0").map(D19x19::repr),
+    Ok(10i128.pow(29))
+  );
+
+  for input in [
+    "_", "__", "_1", "-_1", "+_1", "_.5", "._5", "1._5", "1.__5", "._", "1._", "1._e1", "_e1",
+    "1e_", "1e__", "1e+_", "1e_+1", "1e_-1", "1_e", "1_e_", "1.5_e",
+  ] {
+    assert_eq!(
+      parse_kind::<D5x4>(input),
+      Some(ParseErrorKind::InvalidSyntax),
+      "input {input:?}"
+    );
+  }
+
+  // Long runs of `_` wherever they are allowed.
+  let underscores = "_".repeat(10_000);
+  assert_eq!(
+    Price::parse(&format!(
+      "1{underscores}.5{underscores}e{underscores}1{underscores}"
+    ))
+    .map(Price::repr),
+    Ok(1_500_000_000)
+  );
+}
+
+#[test]
+fn parse_nonfinite() {
+  for word in [
+    "inf",
+    "INF",
+    "Inf",
+    "iNf",
+    "infinity",
+    "Infinity",
+    "INFINITY",
+    "InFiNiTy",
+    "nan",
+    "NaN",
+    "nAn",
+    "NAN",
+    "snan",
+    "sNaN",
+    "SNAN",
+    "sNAN",
+    "NaN12",
+    "nan0",
+    "NAN0123456789",
+    "sNaN12",
+    "snan007",
+  ] {
+    for sign in ["", "+", "-"] {
+      let input = format!("{sign}{word}");
+      assert_eq!(
+        parse_kind::<D2x2>(&input),
+        Some(ParseErrorKind::NotFinite),
+        "input {input:?}"
+      );
+      // An unsigned storage rejects a leading `-` first.
+      let unsigned = if sign == "-" {
+        ParseErrorKind::InvalidSyntax
+      } else {
+        ParseErrorKind::NotFinite
+      };
+      assert_eq!(
+        parse_kind::<D2x2u16>(&input),
+        Some(unsigned),
+        "input {input:?}"
+      );
+    }
+  }
+  assert_eq!(
+    parse_kind::<Price>(&format!("NaN{}", nines(10_000))),
+    Some(ParseErrorKind::NotFinite)
+  );
+
+  for input in [
+    "i",
+    "in",
+    "n",
+    "na",
+    "s",
+    "sn",
+    "sna",
+    "infi",
+    "infin",
+    "infinit",
+    "infinityy",
+    "infinite",
+    "infs",
+    "inf1",
+    "inf_",
+    "inf.",
+    "infe1",
+    "infinity1",
+    "nan_1",
+    "NaN1_2",
+    "nan-1",
+    "nan+1",
+    "nan.1",
+    "nane1",
+    "nanx",
+    "nan ",
+    " nan",
+    "inf ",
+    " inf",
+    "+-inf",
+    "--inf",
+    "++nan",
+    "ssnan",
+    "nnan",
+    "naan",
+    "sinf",
+    "sinfinity",
+    "snanf",
+    "1inf",
+    "1nan",
+    "0nan",
+    ".inf",
+    "inf\u{0}",
+    "NaN\u{663}",
+    "\u{221e}",
+    "-\u{221e}",
+  ] {
+    assert_eq!(
+      parse_kind::<D2x2>(input),
+      Some(ParseErrorKind::InvalidSyntax),
+      "input {input:?}"
+    );
+    assert_eq!(
+      parse_kind::<D2x2u16>(input),
+      Some(ParseErrorKind::InvalidSyntax),
+      "input {input:?}"
+    );
+  }
+}
+
+#[test]
+fn parse_huge_exponents() {
+  // The exponent saturates while parsing, and the result is still decided exactly.
+  let u64_max = u64::MAX.to_string();
+  let long = nines(10_000);
+  for exponent in [
+    "999999999",
+    u64_max.as_str(),
+    "18446744073709551616",
+    long.as_str(),
+  ] {
+    assert_eq!(
+      parse_kind::<D2x2>(&format!("1e{exponent}")),
+      Some(ParseErrorKind::OutOfRange)
+    );
+    assert_eq!(
+      parse_kind::<D2x2>(&format!("-1E+{exponent}")),
+      Some(ParseErrorKind::OutOfRange)
+    );
+    assert_eq!(
+      parse_kind::<D2x2>(&format!("1e-{exponent}")),
+      Some(ParseErrorKind::Inexact)
+    );
+    assert_eq!(
+      parse_kind::<D0x38>(&format!("-0.5e-{exponent}")),
+      Some(ParseErrorKind::Inexact)
+    );
+    assert_eq!(
+      parse_kind::<D38x0>(&format!("{}e{exponent}", nines(38))),
+      Some(ParseErrorKind::OutOfRange)
+    );
+    assert_eq!(
+      parse_kind::<D2x2u16>(&format!("1e-{exponent}")),
+      Some(ParseErrorKind::Inexact)
+    );
+    // Zero is zero with any exponent.
+    for input in [
+      format!("0e{exponent}"),
+      format!("-0e-{exponent}"),
+      format!("0.000e+{exponent}"),
+      format!("+.0e{exponent}"),
+    ] {
+      assert_eq!(D2x2::parse(&input), Ok(D2x2::ZERO), "input {input:?}");
+      assert_eq!(D0x38::parse(&input), Ok(D0x38::ZERO), "input {input:?}");
+    }
+    assert_eq!(D2x2u16::parse(&format!("0e-{exponent}")), Ok(D2x2u16::ZERO));
+  }
+
+  // Leading zeros of the exponent do not saturate it.
+  let long_zeros = zeros(10_000);
+  assert_eq!(D2x2::parse(&format!("1e{long_zeros}")), Ok(D2x2::ONE));
+  assert_eq!(
+    D2x2::parse(&format!("1e{long_zeros}1")).map(D2x2::repr),
+    Ok(1_000)
+  );
+  assert_eq!(
+    D2x2::parse(&format!("1e-{long_zeros}2")).map(D2x2::repr),
+    Ok(1)
+  );
+}
+
+#[test]
+fn parse_long_mantissas_with_exponents() {
+  // An exponent cancels any number of zeros exactly.
+  for count in [0, 1, 37, 38, 39, 1_000, 10_000] {
+    let zeros = zeros(count);
+    let one = format!("1{zeros}e-{count}");
+    assert_eq!(D2x2::parse(&one), Ok(D2x2::ONE), "input {one:?}");
+    assert_eq!(D2x2u16::parse(&one), Ok(D2x2u16::ONE), "input {one:?}");
+    assert_eq!(
+      D2x2::parse(&format!("0.{zeros}1e{}", count + 1)),
+      Ok(D2x2::ONE)
+    );
+    assert_eq!(
+      D2x2::parse(&format!("-.{zeros}1E+{}", count + 1)),
+      Ok(D2x2::ONE.neg())
+    );
+    assert_eq!(
+      D2x2::parse(&format!("1{zeros}e-{}", count + 2)).map(D2x2::repr),
+      Ok(1)
+    );
+    assert_eq!(
+      parse_kind::<D2x2>(&format!("1{zeros}e-{}", count + 3)),
+      Some(ParseErrorKind::Inexact)
+    );
+    assert_eq!(
+      parse_kind::<D2x2>(&format!("1{zeros}00e-{count}")),
+      Some(ParseErrorKind::OutOfRange)
+    );
+    // The largest values, written with extra zeros.
+    assert_eq!(
+      D19x19::parse(&format!("{}{zeros}e-{}", nines(38), count + 19)),
+      Ok(D19x19::MAX)
+    );
+    assert_eq!(
+      D0x38::parse(&format!("0.{zeros}{}e{count}", nines(38))),
+      Ok(D0x38::MAX)
+    );
+  }
 }
 
 #[test]
@@ -429,6 +874,36 @@ fn parse_error_priority() {
     parse_kind::<D2x2>("123.456."),
     Some(ParseErrorKind::InvalidSyntax)
   );
+  // Also after an exponent that would put the value out of range.
+  for input in ["1e999_x", "1e-999 ", "-1e99999999999999999999999.", "1e9e9"] {
+    assert_eq!(
+      parse_kind::<D2x2>(input),
+      Some(ParseErrorKind::InvalidSyntax),
+      "input {input:?}"
+    );
+  }
+  // An infinity or a NaN is reported only when the whole input is one.
+  assert_eq!(parse_kind::<D2x2>("inf"), Some(ParseErrorKind::NotFinite));
+  assert_eq!(
+    parse_kind::<D2x2>("infx"),
+    Some(ParseErrorKind::InvalidSyntax)
+  );
+  assert_eq!(
+    parse_kind::<D2x2>("NaN1_2"),
+    Some(ParseErrorKind::InvalidSyntax)
+  );
+  // An unsigned storage rejects a leading `-` before anything else.
+  assert_eq!(
+    parse_kind::<D2x2u16>("inf"),
+    Some(ParseErrorKind::NotFinite)
+  );
+  for input in ["-inf", "-NaN", "-1e999", "-1e-999", "-0e5"] {
+    assert_eq!(
+      parse_kind::<D2x2u16>(input),
+      Some(ParseErrorKind::InvalidSyntax),
+      "input {input:?}"
+    );
+  }
   // Out of range and inexact at once reports out of range.
   assert_eq!(
     parse_kind::<D2x2>("123.456"),
@@ -436,6 +911,14 @@ fn parse_error_priority() {
   );
   assert_eq!(
     parse_kind::<D0x2>("1.001"),
+    Some(ParseErrorKind::OutOfRange)
+  );
+  assert_eq!(
+    parse_kind::<D2x2>("0.123456e3"),
+    Some(ParseErrorKind::OutOfRange)
+  );
+  assert_eq!(
+    parse_kind::<D0x2>("1001e-3"),
     Some(ParseErrorKind::OutOfRange)
   );
 }
@@ -458,10 +941,8 @@ fn parse_at_the_i8_limit() {
     Some(ParseErrorKind::OutOfRange)
   );
   assert_eq!(parse_kind::<D0x2>("0.001"), Some(ParseErrorKind::Inexact));
-  assert_eq!(
-    parse_kind::<D0x2>(".99"),
-    Some(ParseErrorKind::InvalidSyntax)
-  );
+  assert_eq!(D0x2::parse(".99"), Ok(D0x2::MAX));
+  assert_eq!(D0x2::parse("-.99"), Ok(D0x2::MIN));
 
   assert_eq!(D2x0::parse("99"), Ok(D2x0::MAX));
   assert_eq!(D2x0::parse("-99.000").map(D2x0::repr), Ok(-99));
@@ -538,10 +1019,25 @@ fn parse_in_const_context() {
     Err(_) => panic!("invalid tick"),
   };
   const ERROR: Result<Price, ParseError> = Price::parse("1.000000001");
+  const EXPONENT: Price = match Price::parse("+1_000.5E-3") {
+    Ok(value) => value,
+    Err(_) => panic!("invalid value"),
+  };
+  const NOT_FINITE: Result<Price, ParseError> = Price::parse("-Infinity");
+  const SATURATED: Result<Price, ParseError> = Price::parse("1e-99999999999999999999999");
 
   assert_eq!(TICK.repr(), 1_000_000);
   assert_eq!(
     ERROR.map_err(|err| err.kind()),
+    Err(ParseErrorKind::Inexact)
+  );
+  assert_eq!(EXPONENT.repr(), 100_050_000);
+  assert_eq!(
+    NOT_FINITE.map_err(|err| err.kind()),
+    Err(ParseErrorKind::NotFinite)
+  );
+  assert_eq!(
+    SATURATED.map_err(|err| err.kind()),
     Err(ParseErrorKind::Inexact)
   );
 }
@@ -883,6 +1379,12 @@ fn errors() {
     D2x2::parse("x").unwrap_err().to_string(),
     "invalid decimal syntax"
   );
+  let not_finite = D2x2::parse("NaN").unwrap_err();
+  assert_eq!(not_finite.kind(), ParseErrorKind::NotFinite);
+  assert_eq!(
+    not_finite.to_string(),
+    "decimal cannot represent infinity or NaN"
+  );
   assert_eq!(
     D2x2::parse("100").unwrap_err().to_string(),
     "decimal out of range of the target type"
@@ -967,6 +1469,16 @@ fn unsigned_parse() {
     ("0.01", 1),
     ("99.99", 9_999),
     ("1.230000", 123),
+    // A `+` sign, and a `-` in the exponent, are accepted.
+    ("+1", 100),
+    ("+.5", 50),
+    ("5.", 500),
+    ("1e-2", 1),
+    ("1E-02", 1),
+    ("0e-5", 0),
+    ("+0e-5", 0),
+    ("125e-2", 125),
+    ("+0.5e+1", 500),
   ];
   for &(input, coeff) in cases {
     assert_eq!(
@@ -976,10 +1488,18 @@ fn unsigned_parse() {
     );
     assert_eq!(input.parse::<D2x2u16>().map(D2x2u16::repr), Ok(coeff));
   }
+  assert_eq!(D10x9u64::parse("1e-5").map(D10x9u64::repr), Ok(10_000));
+  assert_eq!(D10x9u64::parse("1E-05").map(D10x9u64::repr), Ok(10_000));
+  assert_eq!(D10x9u64::parse("0e-5"), Ok(D10x9u64::ZERO));
+  assert_eq!(
+    D38x0u128::parse("1e37").map(D38x0u128::repr),
+    Ok(10u128.pow(37))
+  );
 
-  // A `-` is invalid syntax, even for zero, and syntax comes before range and exactness.
+  // A leading `-` is invalid syntax, even for zero, and syntax comes before range and exactness.
   for input in [
-    "-", "-0", "-0.0", "-00", "-1", "-0.01", "-99.99", "-100", "-0.001", "-.5", "--1", "+1",
+    "-", "-0", "-0.0", "-00", "-1", "-0.01", "-99.99", "-100", "-0.001", "-.5", "--1", "-+1",
+    "-0e5", "-0e-5", "-1e-1", "-1e5", "-inf", "-nan", "-sNaN1",
   ] {
     assert_eq!(
       parse_kind::<D2x2u16>(input),
@@ -993,8 +1513,17 @@ fn unsigned_parse() {
     Some(ParseErrorKind::OutOfRange)
   );
   assert_eq!(
+    parse_kind::<D2x2u16>("1e2"),
+    Some(ParseErrorKind::OutOfRange)
+  );
+  assert_eq!(
     parse_kind::<D2x2u16>("1.234"),
     Some(ParseErrorKind::Inexact)
+  );
+  assert_eq!(parse_kind::<D2x2u16>("1e-3"), Some(ParseErrorKind::Inexact));
+  assert_eq!(
+    parse_kind::<D2x2u16>("+inf"),
+    Some(ParseErrorKind::NotFinite)
   );
 
   // Signed storage still reads `-0` as zero.

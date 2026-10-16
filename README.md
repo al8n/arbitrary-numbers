@@ -76,7 +76,7 @@ fn main() -> Result<(), ParseError> {
   alignment and ABI of `Repr`.
 - With a signed `Repr`, the range is symmetric and `Neg` is implemented. With an unsigned `Repr`,
   values run from zero to `MAX`, there is no negation, `checked_sub` returns `None` below zero,
-  and parsing rejects any `-`, even in `-0`.
+  and parsing rejects a leading `-`, even in `-0`.
 - Zero digits, more than 38 digits, or a `Repr` that is too small are rejected during type
   checking. With the default `Repr`, zero or more than 38 digits fail wherever the type is
   written; with an explicit `Repr`, the type's constants and constructors fail, so no value of it
@@ -92,8 +92,13 @@ fn main() -> Result<(), ParseError> {
   unsigned storage as `OutOfRange`.
 - Methods that depend only on the storage are `const fn`, so constants can be parsed and computed
   at compile time.
-- `parse` accepts `["-"] 1*DIGIT ["." 1*DIGIT]` in ASCII, without the `-` for an unsigned `Repr`,
-  and `Display` writes the shortest exact text. Format precision pads with zeros but never rounds.
+- `parse` accepts ASCII text with an optional sign, point and exponent, and `_` separators as in
+  Rust literals: the numeric strings of the General Decimal Arithmetic specification and every
+  form that `f64` parses, such as `-1.5`, `+.5`, `5.`, `2.5E-3` and `1_000`. Infinity and NaN are
+  recognized and reported as `NotFinite`, because a `Decimal` is always finite. A value that does
+  not fit is `OutOfRange` or `Inexact`, never rounded.
+- `Display` writes the shortest exact text, without an exponent. Format precision pads with zeros
+  but never rounds.
 
 #### License
 

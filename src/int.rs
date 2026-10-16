@@ -150,17 +150,21 @@ macro_rules! native {
       value * pow10(exp)
     }
 
-    /// Appends the ASCII digits `digits[start..end]` to `value`, computing `value * 10 + d` for
-    /// each digit `d`. Requires ASCII digits and a representable result.
+    /// Appends the ASCII digits in `bytes[start..end]` to `value`, computing `value * 10 + d` for
+    /// each digit `d` and skipping every other byte, such as the separators `_` and `.`. Requires
+    /// a representable result.
     pub(crate) const fn push_digits(
       mut value: $int,
-      digits: &[u8],
+      bytes: &[u8],
       start: usize,
       end: usize,
     ) -> $int {
       let mut i = start;
       while i < end {
-        value = value * 10 + (digits[i] - b'0') as $int;
+        let byte = bytes[i];
+        if byte.is_ascii_digit() {
+          value = value * 10 + (byte - b'0') as $int;
+        }
         i += 1;
       }
       value

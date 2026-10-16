@@ -84,6 +84,15 @@ macro_rules! core_tests {
             let split = digits.len() / 2;
             let prefix = native::push_digits(native::ZERO, digits, 0, split);
             assert_eq!(native::push_digits(prefix, digits, split, digits.len()), a);
+            // Separators between the digits are skipped.
+            let mut separated = Vec::new();
+            for (i, &digit) in digits.iter().enumerate() {
+              if i == split {
+                separated.push(b'.');
+              }
+              separated.extend([digit, b'_']);
+            }
+            assert_eq!(native::push_digits(native::ZERO, &separated, 0, separated.len()), a);
           }
         }
       }

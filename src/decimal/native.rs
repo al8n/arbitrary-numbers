@@ -112,12 +112,37 @@ macro_rules! native_decimal {
         }
       }
 
-      /// Parses a decimal from text.
+      /// Parses a decimal from text, exactly.
       ///
-      /// The input must match `["-"] 1*DIGIT ["." 1*DIGIT]` in ASCII: there is no `+`, whitespace,
-      /// exponent or `_`, and neither the integral part (`.5`) nor the fraction part after a
-      /// point (`1.`) may be missing. Leading zeros in the integral part are accepted. Fraction
-      /// digits beyond `Fraction` are accepted only when they are all `0`. `-0` parses as zero.
+      /// The input is ASCII text in the following grammar, in which letters match in either case.
+      /// It accepts the numeric strings of the General Decimal Arithmetic specification, every
+      /// form that [`f64`] parses with [`FromStr`], and `_` separators as in Rust literals.
+      ///
+      /// ```text
+      /// number     = [sign] (finite / nonfinite)
+      /// sign       = "+" / "-"
+      /// finite     = (digits ["." [digits]] / "." digits) [exponent]
+      /// exponent   = ("e" / "E") [sign] exp-digits
+      /// digits     = DIGIT *(DIGIT / "_")
+      /// exp-digits = *"_" DIGIT *(DIGIT / "_")
+      /// nonfinite  = "inf" / "infinity" / ["s"] "nan" *DIGIT
+      /// ```
+      ///
+      /// The integral and fraction digits each start with a digit, after which `_` may appear
+      /// anywhere, also repeated or at the end. The exponent's digits may have `_` anywhere after
+      /// its sign, also first, but need at least one digit. So `1_000.000_1`, `1__0`, `5_.5`,
+      /// `1e_1_0`, `1e+_5`, `+.5`, `5.` and `.5e3` are valid, while `_1`, `._5`, `1._5`, `1e_`,
+      /// `1e_+5`, `.`, `+` and `e5` are not. Whitespace, `,`, hexadecimal and non-ASCII digits are
+      /// never accepted.
+      ///
+      /// The value is the mantissa times ten to the power of the exponent, and it must fit the
+      /// type exactly: once the exponent has moved the point, the integral part may have at most
+      /// `Integral` digits after its leading zeros, and the fraction digits beyond the first
+      /// `Fraction` must all be `0`. Nothing is rounded. The exponent may have any number of
+      /// digits and is applied exactly, so `1000e-3` and `0.0001e4` are both one, and zero parses
+      /// with any exponent, as in `0e999999999`. `-0` parses as zero. A decimal is always finite,
+      /// so an infinity or a NaN, including a signaling `sNaN` and a NaN with diagnostic digits
+      /// such as `NaN123`, is recognized but reported as an error.
       ///
       /// Runs in linear time and constant space.
       ///
@@ -125,27 +150,50 @@ macro_rules! native_decimal {
       ///
       /// The first condition that applies, in this order, determines the error kind:
       ///
-      /// 1. [`Empty`](crate::ParseErrorKind::Empty): the input is empty.
+      /// 1. [`Empty`](crate::ParseErrorKind::Empty): the input is empty. Whitespace alone is
+      ///    invalid syntax.
       /// 2. [`InvalidSyntax`](crate::ParseErrorKind::InvalidSyntax): the input does not match
-      ///    the grammar.
-      /// 3. [`OutOfRange`](crate::ParseErrorKind::OutOfRange): the integral part, without leading
-      ///    zeros, has more than `Integral` digits.
-      /// 4. [`Inexact`](crate::ParseErrorKind::Inexact): a fraction digit beyond the first
-      ///    `Fraction` is not `0`.
+      ///    the grammar. The whole input is checked before its value, so `1e999_x` is invalid
+      ///    syntax rather than out of range.
+      /// 3. [`NotFinite`](crate::ParseErrorKind::NotFinite): the input is an infinity or a NaN.
+      /// 4. [`OutOfRange`](crate::ParseErrorKind::OutOfRange): once the exponent has moved the
+      ///    point, the integral part has more than `Integral` digits after its leading zeros.
+      /// 5. [`Inexact`](crate::ParseErrorKind::Inexact): once the exponent has moved the point,
+      ///    a fraction digit beyond the first `Fraction` is not `0`.
+      ///
+      /// # Examples
+      ///
+      /// ```
+      /// use arbitrary_numbers::{Decimal, ParseErrorKind, typenum::U1};
+      ///
+      #[doc = concat!("type D = Decimal<U1, U1, ", stringify!($repr), ">;")]
+      ///
+      /// for text in ["2.5", "+2.5", "02.50", "25e-1", "0.25E+1", ".25e1", "2_5e-1", "250_000e-5"] {
+      ///   assert_eq!(D::parse(text)?.repr(), 25);
+      /// }
+      /// assert_eq!(D::parse("-5.")?.repr(), -50);
+      /// assert_eq!(D::parse("-0e5")?, D::ZERO);
+      ///
+      /// let kind = |text| D::parse(text).map_err(|err| err.kind());
+      /// assert_eq!(kind(""), Err(ParseErrorKind::Empty));
+      /// assert_eq!(kind(" 1"), Err(ParseErrorKind::InvalidSyntax));
+      /// assert_eq!(kind("1e9_x"), Err(ParseErrorKind::InvalidSyntax));
+      /// assert_eq!(kind("-Infinity"), Err(ParseErrorKind::NotFinite));
+      /// assert_eq!(kind("NaN"), Err(ParseErrorKind::NotFinite));
+      /// assert_eq!(kind("1e1"), Err(ParseErrorKind::OutOfRange));
+      /// assert_eq!(kind("0.05"), Err(ParseErrorKind::Inexact));
+      /// // Out of range and inexact at once.
+      /// assert_eq!(kind("10.05"), Err(ParseErrorKind::OutOfRange));
+      /// # Ok::<(), arbitrary_numbers::ParseError>(())
+      /// ```
       pub const fn parse(s: &str) -> Result<Self, ParseError> {
         let input = s.as_bytes();
         let digits = match parse::scan(input, Self::INTEGRAL, Self::FRACTION, true) {
           Ok(digits) => digits,
           Err(err) => return Err(err),
         };
-        let mut coeff = int::$repr::push_digits(
-          int::$repr::ZERO,
-          input,
-          digits.integral_start,
-          digits.integral_end,
-        );
-        coeff = int::$repr::push_digits(coeff, input, digits.fraction_start, digits.fraction_end);
-        coeff = int::$repr::mul_pow10(coeff, digits.padding);
+        let mut coeff = int::$repr::push_digits(int::$repr::ZERO, input, digits.start, digits.end);
+        coeff = int::$repr::mul_pow10(coeff, digits.scale);
         if digits.negative {
           coeff = int::$repr::neg(coeff);
         }
@@ -261,13 +309,39 @@ macro_rules! native_decimal {
         }
       }
 
-      /// Parses a decimal from text.
+      /// Parses a decimal from text, exactly.
       ///
-      /// The input must match `1*DIGIT ["." 1*DIGIT]` in ASCII: there is no sign, whitespace,
-      /// exponent or `_`, and neither the integral part (`.5`) nor the fraction part after a
-      /// point (`1.`) may be missing. As for the unsigned integers of the standard library, a `-`
-      /// is rejected, even in `-0`. Leading zeros in the integral part are accepted. Fraction
-      /// digits beyond `Fraction` are accepted only when they are all `0`.
+      /// The input is ASCII text in the following grammar, in which letters match in either case.
+      /// It accepts the numeric strings of the General Decimal Arithmetic specification, every
+      /// form that [`f64`] parses with [`FromStr`], and `_` separators as in Rust literals, except
+      /// that the number has no `-` sign: as for the unsigned integers of the standard library, a
+      /// leading `-` is rejected, even in `-0` or `-inf`. The sign of the exponent may be `-`.
+      ///
+      /// ```text
+      /// number     = ["+"] (finite / nonfinite)
+      /// finite     = (digits ["." [digits]] / "." digits) [exponent]
+      /// exponent   = ("e" / "E") [sign] exp-digits
+      /// sign       = "+" / "-"
+      /// digits     = DIGIT *(DIGIT / "_")
+      /// exp-digits = *"_" DIGIT *(DIGIT / "_")
+      /// nonfinite  = "inf" / "infinity" / ["s"] "nan" *DIGIT
+      /// ```
+      ///
+      /// The integral and fraction digits each start with a digit, after which `_` may appear
+      /// anywhere, also repeated or at the end. The exponent's digits may have `_` anywhere after
+      /// its sign, also first, but need at least one digit. So `1_000.000_1`, `1__0`, `5_.5`,
+      /// `1e_1_0`, `1e+_5`, `+.5`, `5.` and `.5e3` are valid, while `_1`, `._5`, `1._5`, `1e_`,
+      /// `1e_+5`, `.`, `+` and `e5` are not. Whitespace, `,`, hexadecimal and non-ASCII digits are
+      /// never accepted.
+      ///
+      /// The value is the mantissa times ten to the power of the exponent, and it must fit the
+      /// type exactly: once the exponent has moved the point, the integral part may have at most
+      /// `Integral` digits after its leading zeros, and the fraction digits beyond the first
+      /// `Fraction` must all be `0`. Nothing is rounded. The exponent may have any number of
+      /// digits and is applied exactly, so `1000e-3` and `0.0001e4` are both one, and zero parses
+      /// with any exponent, as in `0e999999999`. A decimal is always finite, so an infinity or a
+      /// NaN, including a signaling `sNaN` and a NaN with diagnostic digits such as `NaN123`, is
+      /// recognized but reported as an error.
       ///
       /// Runs in linear time and constant space.
       ///
@@ -275,28 +349,49 @@ macro_rules! native_decimal {
       ///
       /// The first condition that applies, in this order, determines the error kind:
       ///
-      /// 1. [`Empty`](crate::ParseErrorKind::Empty): the input is empty.
+      /// 1. [`Empty`](crate::ParseErrorKind::Empty): the input is empty. Whitespace alone is
+      ///    invalid syntax.
       /// 2. [`InvalidSyntax`](crate::ParseErrorKind::InvalidSyntax): the input does not match
-      ///    the grammar, which includes every input that starts with `-`.
-      /// 3. [`OutOfRange`](crate::ParseErrorKind::OutOfRange): the integral part, without leading
-      ///    zeros, has more than `Integral` digits.
-      /// 4. [`Inexact`](crate::ParseErrorKind::Inexact): a fraction digit beyond the first
-      ///    `Fraction` is not `0`.
+      ///    the grammar, which includes every input that starts with `-`. The whole input is
+      ///    checked before its value, so `1e999_x` is invalid syntax rather than out of range.
+      /// 3. [`NotFinite`](crate::ParseErrorKind::NotFinite): the input is an infinity or a NaN.
+      /// 4. [`OutOfRange`](crate::ParseErrorKind::OutOfRange): once the exponent has moved the
+      ///    point, the integral part has more than `Integral` digits after its leading zeros.
+      /// 5. [`Inexact`](crate::ParseErrorKind::Inexact): once the exponent has moved the point,
+      ///    a fraction digit beyond the first `Fraction` is not `0`.
+      ///
+      /// # Examples
+      ///
+      /// ```
+      /// use arbitrary_numbers::{Decimal, ParseErrorKind, typenum::U1};
+      ///
+      #[doc = concat!("type D = Decimal<U1, U1, ", stringify!($repr), ">;")]
+      ///
+      /// for text in ["2.5", "+2.5", "02.50", "25e-1", "0.25E+1", ".25e1", "2_5e-1", "250_000e-5"] {
+      ///   assert_eq!(D::parse(text)?.repr(), 25);
+      /// }
+      /// assert_eq!(D::parse("+0e5")?, D::ZERO);
+      ///
+      /// let kind = |text| D::parse(text).map_err(|err| err.kind());
+      /// assert_eq!(kind(""), Err(ParseErrorKind::Empty));
+      /// assert_eq!(kind("-0"), Err(ParseErrorKind::InvalidSyntax));
+      /// assert_eq!(kind("-inf"), Err(ParseErrorKind::InvalidSyntax));
+      /// assert_eq!(kind("1e9_x"), Err(ParseErrorKind::InvalidSyntax));
+      /// assert_eq!(kind("inf"), Err(ParseErrorKind::NotFinite));
+      /// assert_eq!(kind("1e1"), Err(ParseErrorKind::OutOfRange));
+      /// assert_eq!(kind("0.05"), Err(ParseErrorKind::Inexact));
+      /// // Out of range and inexact at once.
+      /// assert_eq!(kind("10.05"), Err(ParseErrorKind::OutOfRange));
+      /// # Ok::<(), arbitrary_numbers::ParseError>(())
+      /// ```
       pub const fn parse(s: &str) -> Result<Self, ParseError> {
         let input = s.as_bytes();
         let digits = match parse::scan(input, Self::INTEGRAL, Self::FRACTION, false) {
           Ok(digits) => digits,
           Err(err) => return Err(err),
         };
-        let mut coeff = int::$repr::push_digits(
-          int::$repr::ZERO,
-          input,
-          digits.integral_start,
-          digits.integral_end,
-        );
-        coeff = int::$repr::push_digits(coeff, input, digits.fraction_start, digits.fraction_end);
-        coeff = int::$repr::mul_pow10(coeff, digits.padding);
-        Ok(Self::from_coeff(coeff))
+        let coeff = int::$repr::push_digits(int::$repr::ZERO, input, digits.start, digits.end);
+        Ok(Self::from_coeff(int::$repr::mul_pow10(coeff, digits.scale)))
       }
 
       /// Adds two values, returning `None` if the sum is outside the range of the type.

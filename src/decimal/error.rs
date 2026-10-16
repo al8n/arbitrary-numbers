@@ -25,6 +25,7 @@ impl fmt::Display for ParseError {
     f.write_str(match self.kind {
       ParseErrorKind::Empty => "cannot parse decimal from empty string",
       ParseErrorKind::InvalidSyntax => "invalid decimal syntax",
+      ParseErrorKind::NotFinite => "decimal cannot represent infinity or NaN",
       ParseErrorKind::OutOfRange => "decimal out of range of the target type",
       ParseErrorKind::Inexact => "decimal cannot be represented exactly in the target type",
     })
@@ -34,17 +35,25 @@ impl fmt::Display for ParseError {
 impl core::error::Error for ParseError {}
 
 /// Why parsing a [`Decimal`](crate::Decimal) failed.
+///
+/// [`Decimal::parse`](crate::Decimal::parse) reports the first kind that applies, in the order
+/// of the variants.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum ParseErrorKind {
   /// The input is empty.
   Empty,
-  /// The input does not match `["-"] 1*DIGIT ["." 1*DIGIT]`, or it starts with `-` and the
-  /// target has an unsigned storage.
+  /// The input does not match the grammar of [`Decimal::parse`](crate::Decimal::parse), or the
+  /// target has an unsigned storage and the input starts with `-`.
   InvalidSyntax,
-  /// The integral part, without leading zeros, has more than `Integral` digits.
+  /// The input is an infinity or a NaN, such as `inf`, `-Infinity`, `NaN` or `sNaN`, which a
+  /// decimal cannot represent.
+  NotFinite,
+  /// Once the exponent has moved the point, the integral part has more than `Integral` digits
+  /// after its leading zeros.
   OutOfRange,
-  /// A fraction digit beyond the first `Fraction` is not zero.
+  /// Once the exponent has moved the point, a fraction digit beyond the first `Fraction` is not
+  /// zero.
   Inexact,
 }
 
