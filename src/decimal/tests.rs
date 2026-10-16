@@ -13,6 +13,7 @@ use std::{
 use typenum::{U0, U1, U2, U4, U5, U8, U10, U12, U15, U16, U19, U20, U22, U38};
 
 use super::{ConvertError, Decimal, ParseError, ParseErrorKind};
+use crate::{Layout, Storage};
 
 /// `i8` at its 2-digit limit.
 type D1x1 = Decimal<U1, U1>;
@@ -76,6 +77,41 @@ fn trait_surface() {
   assert_traits::<Price>();
   assert_traits::<D19x19>();
   assert_traits::<WidePrice>();
+}
+
+#[test]
+fn generic_bounds() {
+  // Storing and passing values needs no bounds.
+  struct Holder<I, F, R> {
+    value: Decimal<I, F, R>,
+  }
+
+  fn pass<I, F, R>(value: Decimal<I, F, R>) -> Decimal<I, F, R> {
+    value
+  }
+
+  // `Storage` alone lets generic code copy, compare and hash values.
+  fn storage_traits<I, F, R: Storage>() {
+    fn assert<T: Copy + Ord + Hash>() {}
+    assert::<Decimal<I, F, R>>();
+  }
+
+  // Formatting depends on the digit counts, so it also needs the layout.
+  fn layout_traits<I, F, R>()
+  where
+    R: Storage,
+    (I, F): Layout<R>,
+  {
+    fn assert<T: Debug + Display>() {}
+    assert::<Decimal<I, F, R>>();
+  }
+
+  let holder = Holder {
+    value: pass(Price::ONE),
+  };
+  assert_eq!(holder.value, Price::ONE);
+  storage_traits::<U10, U8, i64>();
+  layout_traits::<U10, U8, i64>();
 }
 
 #[test]

@@ -54,8 +54,11 @@ mod tests;
 /// assert_eq!(size_of::<WidePrice>(), 16);
 /// ```
 ///
-/// A combination that does not fit is rejected during type checking wherever the type is used:
-/// zero digits, more than 38 digits, or a `Repr` too small for `Integral + Fraction` digits.
+/// A combination that does not fit is rejected during type checking: zero digits, more than 38
+/// digits, or a `Repr` too small for `Integral + Fraction` digits. With the default `Repr`, zero
+/// digits or more than 38 digits fail wherever the type is written, because the default storage
+/// must be computed. With an explicit `Repr`, a combination that does not fit can be written, but
+/// its constants and constructors fail to compile, so no value of the type can be created.
 ///
 /// ```compile_fail
 /// use arbitrary_numbers::{
@@ -63,13 +66,15 @@ mod tests;
 ///   typenum::{U8, U10},
 /// };
 ///
-/// fn store(price: Decimal<U10, U8, i32>) {} // 18 digits do not fit in an `i32`
+/// let _ = Decimal::<U10, U8, i32>::ZERO; // 18 digits do not fit in an `i32`
 /// ```
 ///
 /// Types with different `Repr` are distinct; [`widen`](Self::widen) and
-/// [`try_convert`](Self::try_convert) convert between decimal types. Generic code names `Repr` and
-/// repeats the bound `(I, F): Layout<R>` (see [`Layout`]); the default `Repr` is meant for
-/// concrete types.
+/// [`try_convert`](Self::try_convert) convert between decimal types. The default `Repr` is meant
+/// for concrete types, and generic code names `Repr`. `Decimal` itself has no bounds, so generic
+/// code can store and pass `Decimal<I, F, R>` values without any. It needs `R: Storage` to copy,
+/// compare or hash them, and adds `(I, F): Layout<R>` only where it uses items that depend on the
+/// digit counts, such as formatting and conversions (see [`Layout`]).
 ///
 /// # Operations
 ///
@@ -142,23 +147,14 @@ mod tests;
 /// # Ok::<(), arbitrary_numbers::ParseError>(())
 /// ```
 #[repr(transparent)]
-pub struct Decimal<Integral, Fraction, Repr = <Sum<Integral, Fraction> as DigitCount>::Storage>
-where
-  (Integral, Fraction): Layout<Repr>,
-{
+pub struct Decimal<Integral, Fraction, Repr = <Sum<Integral, Fraction> as DigitCount>::Storage> {
   repr: Repr,
   _digits: PhantomData<(Integral, Fraction)>,
 }
 
-impl<I, F, R> Decimal<I, F, R>
-where
-  (I, F): Layout<R>,
-{
-  const INTEGRAL: u32 = <(I, F) as SealedLayout<R>>::INTEGRAL;
-  const FRACTION: u32 = <(I, F) as SealedLayout<R>>::FRACTION;
-  const DIGITS: u32 = <(I, F) as SealedLayout<R>>::DIGITS;
-
-  /// Wraps a coefficient that satisfies `|repr| <= 10^DIGITS - 1`.
+impl<I, F, R> Decimal<I, F, R> {
+  /// Wraps a coefficient without checking it. Callers ensure that the layout of the type holds
+  /// and that `|repr| <= 10^(Integral + Fraction) - 1`.
   const fn from_coeff(repr: R) -> Self {
     Self {
       repr,
@@ -169,8 +165,16 @@ where
 
 impl<I, F, R> Decimal<I, F, R>
 where
-  R: Storage,
   (I, F): Layout<R>,
+{
+  const INTEGRAL: u32 = <(I, F) as SealedLayout<R>>::INTEGRAL;
+  const FRACTION: u32 = <(I, F) as SealedLayout<R>>::FRACTION;
+  const DIGITS: u32 = <(I, F) as SealedLayout<R>>::DIGITS;
+}
+
+impl<I, F, R> Decimal<I, F, R>
+where
+  R: Storage,
 {
   /// Multiplies two decimals exactly.
   ///
@@ -195,18 +199,25 @@ where
   pub fn exact_mul<I2, F2, R2>(self, rhs: Decimal<I2, F2, R2>) -> Decimal<Sum<I, I2>, Sum<F, F2>>
   where
     R2: Storage,
-    (I2, F2): Layout<R2>,
     I: Add<I2>,
     F: Add<F2>,
     Sum<I, I2>: Add<Sum<F, F2>>,
     Sum<Sum<I, I2>, Sum<F, F2>>: DigitCount,
-    (Sum<I, I2>, Sum<F, F2>): Layout<<Sum<Sum<I, I2>, Sum<F, F2>> as DigitCount>::Storage>,
   {
-    // Both coefficients have at most 38 digits in total, so the product is below 10^38 < 2^127.
+    // Every value has at most the digits of its type: the other constructors require the layout
+    // of the type they create, and a product has at most as many digits as its operands
+    // together, which is the digit count of its type. `DigitCount` caps that count at 38, so the
+    // product is below 10^38 < 2^127 and fits the storage that `DigitCount` picks for it.
     let product = int::i128::mul(self.repr.to_i128(), rhs.repr.to_i128());
     Decimal::from_coeff(SealedStorage::from_i128(product))
   }
+}
 
+impl<I, F, R> Decimal<I, F, R>
+where
+  R: Storage,
+  (I, F): Layout<R>,
+{
   /// Converts to a type with at least as many integral and fraction digits, and any storage that
   /// holds them. Never fails.
   ///
@@ -306,8 +317,7 @@ const fn within(value: i128, max: i128) -> bool {
 
 impl<I, F, R> Clone for Decimal<I, F, R>
 where
-  R: Storage,
-  (I, F): Layout<R>,
+  R: Copy,
 {
   #[inline]
   fn clone(&self) -> Self {
@@ -315,17 +325,11 @@ where
   }
 }
 
-impl<I, F, R> Copy for Decimal<I, F, R>
-where
-  R: Storage,
-  (I, F): Layout<R>,
-{
-}
+impl<I, F, R> Copy for Decimal<I, F, R> where R: Copy {}
 
 impl<I, F, R> PartialEq for Decimal<I, F, R>
 where
-  R: Storage,
-  (I, F): Layout<R>,
+  R: PartialEq,
 {
   #[inline]
   fn eq(&self, other: &Self) -> bool {
@@ -333,17 +337,11 @@ where
   }
 }
 
-impl<I, F, R> Eq for Decimal<I, F, R>
-where
-  R: Storage,
-  (I, F): Layout<R>,
-{
-}
+impl<I, F, R> Eq for Decimal<I, F, R> where R: Eq {}
 
 impl<I, F, R> PartialOrd for Decimal<I, F, R>
 where
-  R: Storage,
-  (I, F): Layout<R>,
+  R: Ord,
 {
   #[inline]
   fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
@@ -353,19 +351,17 @@ where
 
 impl<I, F, R> Ord for Decimal<I, F, R>
 where
-  R: Storage,
-  (I, F): Layout<R>,
+  R: Ord,
 {
   #[inline]
   fn cmp(&self, other: &Self) -> Ordering {
-    self.repr.compare(other.repr)
+    self.repr.cmp(&other.repr)
   }
 }
 
 impl<I, F, R> Hash for Decimal<I, F, R>
 where
-  R: Storage,
-  (I, F): Layout<R>,
+  R: Hash,
 {
   #[inline]
   fn hash<H: Hasher>(&self, state: &mut H) {

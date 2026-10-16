@@ -1,8 +1,8 @@
 //! Compile-failure diagnostics, compared against the `.stderr` snapshot next to each case.
 //!
 //! The cases in `tests/ui` produce the same output on stable and nightly compilers. The cases in
-//! `tests/ui/nightly` use a type whose default storage cannot be computed: the first error is this
-//! crate's diagnostic, but the follow-up errors differ between compiler releases, so those
+//! `tests/ui/nightly` write out a type whose default storage cannot be computed: the first error is
+//! this crate's diagnostic, but the follow-up errors differ between compiler releases, so those
 //! snapshots are compared only on nightly compilers.
 //!
 //! Regenerate the snapshots with `TRYBUILD=overwrite cargo test --test ui` after reviewing a change

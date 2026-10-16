@@ -22,8 +22,8 @@ English | [简体中文][zh-cn-url]
 
 `arbitrary-numbers` provides number types whose sizes are type-level numbers from
 [`typenum`](https://crates.io/crates/typenum) and whose storage is a native integer named in the
-type. Capacity is checked during type checking, so a type that cannot hold its digits does not
-compile.
+type. Capacity is checked during type checking, so no value can be created for a type that cannot
+hold its digits.
 
 | Family | Status |
 |---|---|
@@ -72,8 +72,11 @@ fn main() -> Result<(), ParseError> {
 - `Repr` defaults to the smallest signed integer that holds the digits: `i8` up to 2 digits, `i16`
   up to 4, `i32` up to 9, `i64` up to 18 and `i128` up to 38. A wider `Repr` can be named
   explicitly. The type has the size, alignment and ABI of `Repr`.
-- Zero digits, more than 38 digits, or a `Repr` that is too small fail to compile wherever the type
-  is used.
+- Zero digits, more than 38 digits, or a `Repr` that is too small are rejected during type
+  checking. With the default `Repr`, zero or more than 38 digits fail wherever the type is
+  written; with an explicit `Repr`, the type's constants and constructors fail, so no value of it
+  can be created. The type itself has no bounds, so generic code can store and pass values
+  without any.
 - Every operation is exact. `checked_add` and `checked_sub` return `None` outside the range,
   `exact_mul` returns a wider type that always holds the product, `widen` converts to a type with
   at least as many digits, and `try_convert` reports `OutOfRange` or `Inexact` instead of

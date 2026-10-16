@@ -1,7 +1,6 @@
 macro_rules! core_tests {
   ($($int:ident),+ $(,)?) => {$(
     mod $int {
-      use core::cmp::Ordering;
       use std::string::ToString;
 
       use crate::int::{$int as native, DIGIT_BUF_LEN};
@@ -47,10 +46,8 @@ macro_rules! core_tests {
           assert_eq!(native::is_positive(a), a > 0);
           for b in samples() {
             assert_eq!(native::le(a, b), a <= b);
-            assert_eq!(native::cmp(a, b), a.cmp(&b));
           }
         }
-        assert_eq!(native::cmp(<$int>::MIN, <$int>::MAX), Ordering::Less);
       }
 
       #[test]

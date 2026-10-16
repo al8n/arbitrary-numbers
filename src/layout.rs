@@ -1,6 +1,6 @@
 //! Type-level digit counts and the storage types that hold them.
 
-use core::{cmp::Ordering, hash::Hash, ops::Add};
+use core::{hash::Hash, ops::Add};
 
 use typenum::{IsLessOrEqual, LeEq, Sum, Unsigned};
 
@@ -12,15 +12,10 @@ pub(crate) use sealed::{SealedLayout, SealedStorage};
 use crate::int::{self, DigitBuf};
 
 mod sealed {
-  use core::cmp::Ordering;
-
   use crate::int::DigitBuf;
 
   /// Seals [`Storage`](super::Storage) and gives storage-generic code access to the integer core.
   pub trait SealedStorage: Copy {
-    /// Compares two values as signed integers.
-    fn compare(self, other: Self) -> Ordering;
-
     /// Returns `true` if the value is negative.
     fn is_negative(self) -> bool;
 
@@ -79,7 +74,7 @@ mod sealed {
 ///
 /// Implemented for `i8`, `i16`, `i32`, `i64` and `i128`. This trait is sealed and cannot be
 /// implemented outside this crate.
-pub trait Storage: SealedStorage + Copy + Eq + Hash {}
+pub trait Storage: SealedStorage + Copy + Ord + Hash {}
 
 /// Maps a type-level number of decimal digits to the smallest signed integer type that holds
 /// every value with that many digits.
@@ -118,29 +113,44 @@ pub trait FitsDigits<Repr>: SealedFitsDigits<Repr> {}
 /// Requires that `Repr` holds `Integral + Fraction` decimal digits, implemented for the pair
 /// `(Integral, Fraction)` of type-level numbers.
 ///
-/// Every `Decimal<Integral, Fraction, Repr>` carries the bound `(Integral, Fraction): Layout<Repr>`,
-/// so code that is generic over decimals repeats it, together with [`Storage`] when it uses the
-/// value:
+/// [`Decimal`](crate::Decimal) requires `(Integral, Fraction): Layout<Repr>` on its constants,
+/// constructors, `const fn` methods, formatting and conversions, not on the type itself. Generic
+/// code needs no bounds to store and pass `Decimal<I, F, R>` values and only `R: Storage` to copy,
+/// compare and hash them; it adds `(I, F): Layout<R>` where it uses the other items:
 ///
 /// ```
-/// use arbitrary_numbers::{Decimal, Layout, Storage, typenum::{U2, U4}};
+/// use arbitrary_numbers::{
+///   Decimal, Layout, Storage,
+///   typenum::{U2, U4},
+/// };
 ///
-/// fn describe<I, F, R>(value: Decimal<I, F, R>) -> String
+/// // Storing a value needs no bounds.
+/// struct Entry<I, F, R> {
+///   label: &'static str,
+///   amount: Decimal<I, F, R>,
+/// }
+///
+/// // Formatting depends on the number of fraction digits, so it needs the layout.
+/// fn describe<I, F, R>(entry: &Entry<I, F, R>) -> String
 /// where
 ///   R: Storage,
 ///   (I, F): Layout<R>,
 /// {
-///   format!("{value}")
+///   format!("{}: {}", entry.label, entry.amount)
 /// }
 ///
-/// let value: Decimal<U2, U4> = "12.5".parse().unwrap();
-/// assert_eq!(describe(value), "12.5");
+/// let entry = Entry {
+///   label: "fee",
+///   amount: "12.5".parse::<Decimal<U2, U4>>().unwrap(),
+/// };
+/// assert_eq!(describe(&entry), "fee: 12.5");
 /// ```
 ///
 /// For `typenum` unsigned numbers `Integral` and `Fraction`, the bound holds exactly when
-/// `Integral + Fraction` implements [`FitsDigits<Repr>`]; when it does not, the compiler reports
-/// the diagnostic of [`FitsDigits`]. This trait is sealed and cannot be implemented outside this
-/// crate.
+/// `Integral + Fraction` implements [`FitsDigits<Repr>`]. When it does not, the compiler reports
+/// the diagnostic of [`FitsDigits`], or, for a constant or method whose impl requires the bound,
+/// that the impl's bounds are not satisfied. This trait is sealed and cannot be implemented
+/// outside this crate.
 pub trait Layout<Repr>: SealedLayout<Repr> {}
 
 impl<I, F, R> SealedLayout<R> for (I, F)
@@ -191,11 +201,6 @@ where
 macro_rules! impl_storage {
   ($($int:ident),+ $(,)?) => {$(
     impl SealedStorage for $int {
-      #[inline]
-      fn compare(self, other: Self) -> Ordering {
-        int::$int::cmp(self, other)
-      }
-
       #[inline]
       fn is_negative(self) -> bool {
         int::$int::is_negative(self)

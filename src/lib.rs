@@ -2,9 +2,9 @@
 //!
 //! [`Decimal<Integral, Fraction, Repr>`](Decimal) stores the value `c / 10^Fraction` as a signed
 //! integer coefficient `c` of type `Repr`, with `|c| <= 10^(Integral + Fraction) - 1`. The digit
-//! counts are [`typenum`] numbers, so capacity is checked during type checking: a type with more
-//! than 38 digits, or a `Repr` that cannot hold its digits, does not compile. `Repr` defaults to
-//! the smallest signed integer that holds the digits.
+//! counts are [`typenum`] numbers, so capacity is checked during type checking: no value can be
+//! created for a type with more than 38 digits or with a `Repr` that cannot hold its digits.
+//! `Repr` defaults to the smallest signed integer that holds the digits.
 //!
 //! ```
 //! use arbitrary_numbers::{

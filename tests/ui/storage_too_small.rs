@@ -1,8 +1,11 @@
 use arbitrary_numbers::{
   Decimal,
-  typenum::{U8, U10},
+  typenum::{U2, U8, U10},
 };
 
-fn store(_value: Decimal<U10, U8, i32>) {}
-
-fn main() {}
+fn main() {
+  // A constant reports the unsatisfied bounds of its impl.
+  let _zero = Decimal::<U10, U8, i32>::ZERO;
+  // A conversion reports the storage diagnostic of its target.
+  let _converted = Decimal::<U2, U2>::ZERO.try_convert::<U10, U8, i32>();
+}

@@ -19,8 +19,6 @@ macro_rules! native {
   ($($int:ident),+ $(,)?) => {$(
     #[doc = concat!("Integer core for `", stringify!($int), "`.")]
     pub(crate) mod $int {
-      use core::cmp::Ordering;
-
       use super::{DIGIT_BUF_LEN, DigitBuf};
 
       pub(crate) const ZERO: $int = 0;
@@ -43,17 +41,6 @@ macro_rules! native {
       #[inline]
       pub(crate) const fn le(lhs: $int, rhs: $int) -> bool {
         lhs <= rhs
-      }
-
-      #[inline]
-      pub(crate) const fn cmp(lhs: $int, rhs: $int) -> Ordering {
-        if lhs < rhs {
-          Ordering::Less
-        } else if lhs > rhs {
-          Ordering::Greater
-        } else {
-          Ordering::Equal
-        }
       }
 
       #[inline]
