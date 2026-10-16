@@ -9,9 +9,6 @@ license = "MIT OR Apache-2.0"
 keywords = ["decimal", "fixed-point", "exact", "typenum", "no-std"]
 categories = ["mathematics", "no-std"]
 
-[lib]
-name = "arbitrary_numbers"
-
 [[bench]]
 path = "benches/foo.rs"
 name = "foo"

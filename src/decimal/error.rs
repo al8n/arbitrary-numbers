@@ -26,7 +26,7 @@ impl fmt::Display for ParseError {
       ParseErrorKind::Empty => "cannot parse decimal from empty string",
       ParseErrorKind::InvalidSyntax => "invalid decimal syntax",
       ParseErrorKind::OutOfRange => "decimal out of range of the target type",
-      ParseErrorKind::Inexact => "decimal has more fraction digits than the target type holds",
+      ParseErrorKind::Inexact => "decimal cannot be represented exactly in the target type",
     })
   }
 }

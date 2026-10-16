@@ -34,31 +34,34 @@ compile.
 
 ## Installation
 
-```toml
-[dependencies]
-arbitrary-numbers = "0.1"
+```sh
+cargo add arbitrary-numbers
 ```
 
 ## Example
 
 ```rust
 use arbitrary_numbers::{
-  Decimal,
+  Decimal, ParseError,
   typenum::{U8, U10, U12},
 };
 
 type Price = Decimal<U10, U8>; // 18 digits, stored in an `i64`
 type Quantity = Decimal<U12, U8>; // 20 digits, stored in an `i128`
 
-let price: Price = "64250.5".parse()?;
-let quantity: Quantity = "0.0015".parse()?;
+fn main() -> Result<(), ParseError> {
+  let price: Price = "64250.5".parse()?;
+  let quantity: Quantity = "0.0015".parse()?;
 
-// The product type, `Decimal<U22, U16>`, is computed by the compiler; nothing is rounded.
-let notional = price.exact_mul(quantity);
-assert_eq!(notional.to_string(), "96.37575");
+  // The product type, `Decimal<U22, U16>`, is computed by the compiler; nothing is rounded.
+  let notional = price.exact_mul(quantity);
+  assert_eq!(notional.to_string(), "96.37575");
 
-// Sums are checked against the decimal range, not only the storage range.
-assert_eq!(Price::MAX.checked_add(price), None);
+  // Sums are checked against the decimal range, not only the storage range.
+  assert_eq!(Price::MAX.checked_add(price), None);
+
+  Ok(())
+}
 ```
 
 ## `Decimal`

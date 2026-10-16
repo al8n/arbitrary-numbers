@@ -820,7 +820,7 @@ fn errors() {
   );
   assert_eq!(
     D2x2::parse("0.001").unwrap_err().to_string(),
-    "decimal has more fraction digits than the target type holds"
+    "decimal cannot be represented exactly in the target type"
   );
   assert_eq!(
     ConvertError::OutOfRange.to_string(),
