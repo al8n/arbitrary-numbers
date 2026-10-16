@@ -39,7 +39,8 @@ impl core::error::Error for ParseError {}
 pub enum ParseErrorKind {
   /// The input is empty.
   Empty,
-  /// The input does not match `["-"] 1*DIGIT ["." 1*DIGIT]`.
+  /// The input does not match `["-"] 1*DIGIT ["." 1*DIGIT]`, or it starts with `-` and the
+  /// target has an unsigned storage.
   InvalidSyntax,
   /// The integral part, without leading zeros, has more than `Integral` digits.
   OutOfRange,

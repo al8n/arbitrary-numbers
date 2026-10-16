@@ -2,10 +2,11 @@
 
 use core::{hash::Hash, ops::Add};
 
-use typenum::{IsLessOrEqual, LeEq, Sum, Unsigned};
+use typenum::{B0, B1, IsLessOrEqual, LeEq, Sum, Unsigned};
 
 use sealed::{
-  FractionNotReduced, IntegralNotReduced, SealedDigitCount, SealedFitsDigits, SealedWiden,
+  FractionNotReduced, IntegralNotReduced, SealedDigitCount, SealedFitsDigits, SealedPick,
+  SealedWiden, SealedWidenRepr,
 };
 pub(crate) use sealed::{SealedLayout, SealedStorage};
 
@@ -15,14 +16,21 @@ mod sealed {
   use crate::int::DigitBuf;
 
   /// Seals [`Storage`](super::Storage) and gives storage-generic code access to the integer core.
+  // clippy's `wrong_self_convention` requires `Copy` for `is_*` methods that take `self`.
   pub trait SealedStorage: Copy {
-    /// Returns `true` if the value is negative.
+    /// `B1` for an unsigned storage, `B0` for a signed one.
+    type IsUnsigned: typenum::Bit;
+
+    /// `true` for a signed storage.
+    const SIGNED: bool = !<Self::IsUnsigned as typenum::Bit>::BOOL;
+
+    /// Returns `true` if the value is negative, which an unsigned value never is.
     fn is_negative(self) -> bool;
 
     /// Widens the value to `i128`.
     fn to_i128(self) -> i128;
 
-    /// Narrows `value`, which must be representable.
+    /// Narrows `value`, which must be representable: never negative for an unsigned storage.
     fn from_i128(value: i128) -> Self;
 
     /// Writes the decimal digits of the magnitude to the end of `buf` and returns the index of
@@ -46,8 +54,14 @@ mod sealed {
     const DIGITS: u32;
   }
 
+  /// Seals [`Pick`](super::Pick).
+  pub trait SealedPick<Digits> {}
+
   /// Seals [`Widen`](super::Widen).
   pub trait SealedWiden<Target> {}
+
+  /// Seals [`WidenRepr`](super::WidenRepr).
+  pub trait SealedWidenRepr<Target> {}
 
   /// Implemented only for `B1`, the result of `Integral <= I2` when widening is possible.
   #[diagnostic::on_unimplemented(
@@ -70,43 +84,50 @@ mod sealed {
   impl FractionNotReduced for typenum::B1 {}
 }
 
-/// A signed integer type that can store the coefficient of a [`Decimal`](crate::Decimal).
+/// A native integer type that can store the coefficient of a [`Decimal`](crate::Decimal).
 ///
-/// Implemented for `i8`, `i16`, `i32`, `i64` and `i128`. This trait is sealed and cannot be
-/// implemented outside this crate.
+/// Implemented for the signed `i8`, `i16`, `i32`, `i64` and `i128`, and the unsigned `u8`, `u16`,
+/// `u32`, `u64` and `u128`. A decimal with an unsigned storage is never negative. This trait is
+/// sealed and cannot be implemented outside this crate.
 pub trait Storage: SealedStorage + Copy + Ord + Hash {}
 
-/// Maps a type-level number of decimal digits to the smallest signed integer type that holds
-/// every value with that many digits.
+/// Maps a type-level number of decimal digits to the smallest signed and the smallest unsigned
+/// integer types that hold every value with that many digits.
 ///
-/// | Digits | `Storage` |
-/// |---|---|
-/// | 1-2 | `i8` |
-/// | 3-4 | `i16` |
-/// | 5-9 | `i32` |
-/// | 10-18 | `i64` |
-/// | 19-38 | `i128` |
+/// | Digits | `Signed` | `Unsigned` |
+/// |---|---|---|
+/// | 1-2 | `i8` | `u8` |
+/// | 3-4 | `i16` | `u16` |
+/// | 5-9 | `i32` | `u32` |
+/// | 10-18 | `i64` | `u64` |
+/// | 19 | `i128` | `u64` |
+/// | 20-38 | `i128` | `u128` |
 ///
-/// Implemented for `U1` through `U38`. [`Decimal`](crate::Decimal) uses it to choose its default
-/// storage. This trait is sealed and cannot be implemented outside this crate.
+/// Implemented for `U1` through `U38`. [`Decimal`](crate::Decimal) uses `Signed` as its default
+/// storage, and [`exact_mul`](crate::Decimal::exact_mul) stores a product of two unsigned storages
+/// in `Unsigned`. This trait is sealed and cannot be implemented outside this crate.
 #[diagnostic::on_unimplemented(
   message = "a `Decimal` must have between 1 and 38 digits in total",
   label = "`Integral + Fraction` is zero or greater than 38"
 )]
 pub trait DigitCount: SealedDigitCount {
   /// The smallest signed integer type that holds every value with `Self` decimal digits.
-  type Storage: Storage;
+  type Signed: Storage;
+
+  /// The smallest unsigned integer type that holds every value with `Self` decimal digits.
+  type Unsigned: Storage;
 }
 
 /// Marks that `Repr` holds every value with `Self` decimal digits.
 ///
-/// `Self` is a type-level number of digits. Implemented for every pair that fits: `i8` holds up to
-/// 2 digits, `i16` up to 4, `i32` up to 9, `i64` up to 18 and `i128` up to 38. This trait is
-/// sealed and cannot be implemented outside this crate.
+/// `Self` is a type-level number of digits. Implemented for every pair that fits: `i8` and `u8`
+/// hold up to 2 digits, `i16` and `u16` up to 4, `i32` and `u32` up to 9, `i64` up to 18, `u64` up
+/// to 19, and `i128` and `u128` up to 38. This trait is sealed and cannot be implemented outside
+/// this crate.
 #[diagnostic::on_unimplemented(
   message = "the storage `{Repr}` cannot hold `Integral + Fraction` decimal digits",
   label = "`Integral + Fraction` does not fit in `{Repr}`",
-  note = "`Integral + Fraction` must be at least 1; `i8` holds up to 2 digits, `i16` up to 4, `i32` up to 9, `i64` up to 18 and `i128` up to 38"
+  note = "`Integral + Fraction` must be at least 1; `i8` and `u8` hold up to 2 digits, `i16` and `u16` up to 4, `i32` and `u32` up to 9, `i64` up to 18, `u64` up to 19, and `i128` and `u128` up to 38"
 )]
 pub trait FitsDigits<Repr>: SealedFitsDigits<Repr> {}
 
@@ -172,6 +193,29 @@ where
 {
 }
 
+/// Picks the smallest storage of one sign for a type-level number of decimal digits.
+///
+/// Implemented for the `typenum` bits: `B0` picks [`DigitCount::Signed`] and `B1` picks
+/// [`DigitCount::Unsigned`]. [`Decimal::exact_mul`](crate::Decimal::exact_mul) picks with `B1`
+/// when both operands have unsigned storages and with `B0` otherwise. This trait is sealed and
+/// cannot be implemented outside this crate.
+pub trait Pick<Digits>: SealedPick<Digits> {
+  /// The smallest storage of the picked sign that holds every value with `Digits` decimal digits.
+  type Storage: Storage;
+}
+
+impl<D> SealedPick<D> for B0 {}
+
+impl<D: DigitCount> Pick<D> for B0 {
+  type Storage = D::Signed;
+}
+
+impl<D> SealedPick<D> for B1 {}
+
+impl<D: DigitCount> Pick<D> for B1 {
+  type Storage = D::Unsigned;
+}
+
 /// Requires that a decimal with the digit counts `Self = (Integral, Fraction)` converts to one with
 /// the digit counts `Target = (I2, F2)` without losing digits: `Integral <= I2` and
 /// `Fraction <= F2`.
@@ -198,103 +242,175 @@ where
 {
 }
 
+/// Requires that a value stored in `Self` converts to the storage `Target` whatever its sign: an
+/// unsigned storage converts to any storage, and a signed storage only to a signed one.
+///
+/// Used by [`Decimal::widen`](crate::Decimal::widen), which never fails. A negative value has no
+/// unsigned representation, so a conversion from a signed to an unsigned storage goes through
+/// [`Decimal::try_convert`](crate::Decimal::try_convert). This trait covers only the sign;
+/// [`Layout`] checks that `Target` holds the digits. This trait is sealed and cannot be implemented
+/// outside this crate.
+#[diagnostic::on_unimplemented(
+  message = "`widen` cannot convert from the signed storage `{Self}` to the unsigned storage `{Target}`",
+  note = "use `try_convert` for a conversion that can fail"
+)]
+pub trait WidenRepr<Target>: SealedWidenRepr<Target> {}
+
 macro_rules! impl_storage {
-  ($($int:ident),+ $(,)?) => {$(
-    impl SealedStorage for $int {
-      #[inline]
-      fn is_negative(self) -> bool {
-        int::$int::is_negative(self)
+  (signed: $($int:ident),+; unsigned: $($uint:ident),+ $(,)?) => {
+    $(
+      impl SealedStorage for $int {
+        type IsUnsigned = B0;
+
+        #[inline]
+        fn is_negative(self) -> bool {
+          int::$int::is_negative(self)
+        }
+
+        #[inline]
+        fn to_i128(self) -> i128 {
+          int::$int::to_i128(self)
+        }
+
+        #[inline]
+        fn from_i128(value: i128) -> Self {
+          int::$int::from_i128(value)
+        }
+
+        #[inline]
+        fn write_digits(self, buf: &mut DigitBuf) -> usize {
+          int::$int::write_digits(self, buf)
+        }
       }
 
-      #[inline]
-      fn to_i128(self) -> i128 {
-        int::$int::to_i128(self)
+      impl Storage for $int {}
+    )+
+    $(
+      impl SealedStorage for $uint {
+        type IsUnsigned = B1;
+
+        #[inline]
+        fn is_negative(self) -> bool {
+          false
+        }
+
+        #[inline]
+        fn to_i128(self) -> i128 {
+          int::$uint::to_i128(self)
+        }
+
+        #[inline]
+        fn from_i128(value: i128) -> Self {
+          int::$uint::from_i128(value)
+        }
+
+        #[inline]
+        fn write_digits(self, buf: &mut DigitBuf) -> usize {
+          int::$uint::write_digits(self, buf)
+        }
       }
 
-      #[inline]
-      fn from_i128(value: i128) -> Self {
-        int::$int::from_i128(value)
-      }
-
-      #[inline]
-      fn write_digits(self, buf: &mut DigitBuf) -> usize {
-        int::$int::write_digits(self, buf)
-      }
-    }
-
-    impl Storage for $int {}
-  )+};
+      impl Storage for $uint {}
+    )+
+  };
 }
 
-impl_storage!(i8, i16, i32, i64, i128);
+impl_storage!(signed: i8, i16, i32, i64, i128; unsigned: u8, u16, u32, u64, u128);
+
+/// Implements [`WidenRepr`] from every unsigned storage to every storage, and from every signed
+/// storage to every signed storage.
+macro_rules! impl_widen_repr {
+  (signed: [$($int:ident),+], unsigned: [$($uint:ident),+] $(,)?) => {
+    impl_widen_repr!(@from [$($uint),+] to [$($int,)+ $($uint),+]);
+    impl_widen_repr!(@from [$($int),+] to [$($int),+]);
+  };
+  (@from [$($source:ident),+] to $targets:tt) => {
+    $(impl_widen_repr!(@pairs $source to $targets);)+
+  };
+  (@pairs $source:ident to [$($target:ident),+]) => {
+    $(
+      impl SealedWidenRepr<$target> for $source {}
+
+      impl WidenRepr<$target> for $source {}
+    )+
+  };
+}
+
+impl_widen_repr!(
+  signed: [i8, i16, i32, i64, i128],
+  unsigned: [u8, u16, u32, u64, u128],
+);
 
 /// Passes the digit-count table to `$callback`.
 ///
-/// Each row is `Digits = value => [Minimal, Wider...]`: the `typenum` constant for a number of
-/// digits, its value, and every storage that holds that many digits, smallest first. The first
-/// storage is the `DigitCount` mapping; every listed storage gets `FitsDigits`.
+/// Each row is `Digits = value => [Signed, Wider...], [Unsigned, Wider...]`: the `typenum`
+/// constant for a number of digits, its value, and, for each sign, every storage that holds that
+/// many digits, smallest first. The first storage of each list is the `DigitCount` mapping; every
+/// listed storage gets `FitsDigits`.
 macro_rules! digit_table {
   ($callback:ident) => {
     $callback! {
-      U1 = 1 => [i8, i16, i32, i64, i128],
-      U2 = 2 => [i8, i16, i32, i64, i128],
-      U3 = 3 => [i16, i32, i64, i128],
-      U4 = 4 => [i16, i32, i64, i128],
-      U5 = 5 => [i32, i64, i128],
-      U6 = 6 => [i32, i64, i128],
-      U7 = 7 => [i32, i64, i128],
-      U8 = 8 => [i32, i64, i128],
-      U9 = 9 => [i32, i64, i128],
-      U10 = 10 => [i64, i128],
-      U11 = 11 => [i64, i128],
-      U12 = 12 => [i64, i128],
-      U13 = 13 => [i64, i128],
-      U14 = 14 => [i64, i128],
-      U15 = 15 => [i64, i128],
-      U16 = 16 => [i64, i128],
-      U17 = 17 => [i64, i128],
-      U18 = 18 => [i64, i128],
-      U19 = 19 => [i128],
-      U20 = 20 => [i128],
-      U21 = 21 => [i128],
-      U22 = 22 => [i128],
-      U23 = 23 => [i128],
-      U24 = 24 => [i128],
-      U25 = 25 => [i128],
-      U26 = 26 => [i128],
-      U27 = 27 => [i128],
-      U28 = 28 => [i128],
-      U29 = 29 => [i128],
-      U30 = 30 => [i128],
-      U31 = 31 => [i128],
-      U32 = 32 => [i128],
-      U33 = 33 => [i128],
-      U34 = 34 => [i128],
-      U35 = 35 => [i128],
-      U36 = 36 => [i128],
-      U37 = 37 => [i128],
-      U38 = 38 => [i128],
+      U1 = 1 => [i8, i16, i32, i64, i128], [u8, u16, u32, u64, u128],
+      U2 = 2 => [i8, i16, i32, i64, i128], [u8, u16, u32, u64, u128],
+      U3 = 3 => [i16, i32, i64, i128], [u16, u32, u64, u128],
+      U4 = 4 => [i16, i32, i64, i128], [u16, u32, u64, u128],
+      U5 = 5 => [i32, i64, i128], [u32, u64, u128],
+      U6 = 6 => [i32, i64, i128], [u32, u64, u128],
+      U7 = 7 => [i32, i64, i128], [u32, u64, u128],
+      U8 = 8 => [i32, i64, i128], [u32, u64, u128],
+      U9 = 9 => [i32, i64, i128], [u32, u64, u128],
+      U10 = 10 => [i64, i128], [u64, u128],
+      U11 = 11 => [i64, i128], [u64, u128],
+      U12 = 12 => [i64, i128], [u64, u128],
+      U13 = 13 => [i64, i128], [u64, u128],
+      U14 = 14 => [i64, i128], [u64, u128],
+      U15 = 15 => [i64, i128], [u64, u128],
+      U16 = 16 => [i64, i128], [u64, u128],
+      U17 = 17 => [i64, i128], [u64, u128],
+      U18 = 18 => [i64, i128], [u64, u128],
+      U19 = 19 => [i128], [u64, u128],
+      U20 = 20 => [i128], [u128],
+      U21 = 21 => [i128], [u128],
+      U22 = 22 => [i128], [u128],
+      U23 = 23 => [i128], [u128],
+      U24 = 24 => [i128], [u128],
+      U25 = 25 => [i128], [u128],
+      U26 = 26 => [i128], [u128],
+      U27 = 27 => [i128], [u128],
+      U28 = 28 => [i128], [u128],
+      U29 = 29 => [i128], [u128],
+      U30 = 30 => [i128], [u128],
+      U31 = 31 => [i128], [u128],
+      U32 = 32 => [i128], [u128],
+      U33 = 33 => [i128], [u128],
+      U34 = 34 => [i128], [u128],
+      U35 = 35 => [i128], [u128],
+      U36 = 36 => [i128], [u128],
+      U37 = 37 => [i128], [u128],
+      U38 = 38 => [i128], [u128],
     }
   };
 }
 
 macro_rules! impl_digits {
-  ($($digits:ident = $value:literal => [$min:ident $(, $wider:ident)*]),+ $(,)?) => {$(
+  ($(
+    $digits:ident = $value:literal =>
+      [$signed:ident $(, $wider_signed:ident)*],
+      [$unsigned:ident $(, $wider_unsigned:ident)*]
+  ),+ $(,)?) => {$(
     impl SealedDigitCount for typenum::consts::$digits {}
 
     impl DigitCount for typenum::consts::$digits {
-      type Storage = $min;
+      type Signed = $signed;
+      type Unsigned = $unsigned;
     }
 
-    impl SealedFitsDigits<$min> for typenum::consts::$digits {}
+    impl_digits!(@fits $digits: $signed $(, $wider_signed)*, $unsigned $(, $wider_unsigned)*);
+  )+};
+  (@fits $digits:ident: $($repr:ident),+) => {$(
+    impl SealedFitsDigits<$repr> for typenum::consts::$digits {}
 
-    impl FitsDigits<$min> for typenum::consts::$digits {}
-
-    $(
-      impl SealedFitsDigits<$wider> for typenum::consts::$digits {}
-
-      impl FitsDigits<$wider> for typenum::consts::$digits {}
-    )*
+    impl FitsDigits<$repr> for typenum::consts::$digits {}
   )+};
 }
 

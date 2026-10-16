@@ -10,7 +10,9 @@ use std::{
   vec::Vec,
 };
 
-use typenum::{U0, U1, U2, U4, U5, U8, U10, U12, U15, U16, U19, U20, U22, U38};
+use typenum::{
+  U0, U1, U2, U4, U5, U8, U9, U10, U11, U12, U15, U16, U17, U18, U19, U20, U21, U22, U38,
+};
 
 use super::{ConvertError, Decimal, ParseError, ParseErrorKind};
 use crate::{Layout, Storage};
@@ -32,8 +34,23 @@ type D38x0 = Decimal<U38, U0>;
 type D0x38 = Decimal<U0, U38>;
 type WidePrice = Decimal<U10, U8, i128>;
 
+/// `u8` at its 2-digit limit.
+type D1x1u8 = Decimal<U1, U1, u8>;
+type D0x2u8 = Decimal<U0, U2, u8>;
+type D2x0u8 = Decimal<U2, U0, u8>;
+type D2x2u16 = Decimal<U2, U2, u16>;
+type D5x4u32 = Decimal<U5, U4, u32>;
+/// `u64` at its 19-digit limit, one digit more than `i64` holds.
+type D10x9u64 = Decimal<U10, U9, u64>;
+type D19x0u64 = Decimal<U19, U0, u64>;
+/// `u128` at its 38-digit limit.
+type D19x19u128 = Decimal<U19, U19, u128>;
+type D38x0u128 = Decimal<U38, U0, u128>;
+
 const TEN_POW_19: i128 = 10_000_000_000_000_000_000;
 const MAX_38: i128 = 99_999_999_999_999_999_999_999_999_999_999_999_999;
+const MAX_19_U64: u64 = 9_999_999_999_999_999_999;
+const MAX_38_U128: u128 = 99_999_999_999_999_999_999_999_999_999_999_999_999;
 
 fn nines(count: usize) -> String {
   "9".repeat(count)
@@ -54,6 +71,11 @@ fn storage_layout() {
   let _: i128 = Quantity::ZERO.repr();
   let _: i128 = D19x19::ZERO.repr();
   let _: i128 = WidePrice::ZERO.repr();
+  let _: u8 = D1x1u8::ZERO.repr();
+  let _: u16 = D2x2u16::ZERO.repr();
+  let _: u32 = D5x4u32::ZERO.repr();
+  let _: u64 = D10x9u64::ZERO.repr();
+  let _: u128 = D19x19u128::ZERO.repr();
 
   assert_eq!(size_of::<D1x1>(), size_of::<i8>());
   assert_eq!(size_of::<D2x2>(), size_of::<i16>());
@@ -63,6 +85,10 @@ fn storage_layout() {
   assert_eq!(size_of::<Quantity>(), size_of::<i128>());
   assert_eq!(align_of::<WidePrice>(), align_of::<i128>());
   assert_eq!(size_of::<Option<Price>>(), size_of::<Option<i64>>());
+  assert_eq!(size_of::<D1x1u8>(), size_of::<u8>());
+  assert_eq!(size_of::<D10x9u64>(), size_of::<u64>());
+  assert_eq!(align_of::<D10x9u64>(), align_of::<u64>());
+  assert_eq!(size_of::<D19x19u128>(), size_of::<u128>());
 }
 
 #[test]
@@ -77,6 +103,11 @@ fn trait_surface() {
   assert_traits::<Price>();
   assert_traits::<D19x19>();
   assert_traits::<WidePrice>();
+  assert_traits::<D1x1u8>();
+  assert_traits::<D2x2u16>();
+  assert_traits::<D5x4u32>();
+  assert_traits::<D10x9u64>();
+  assert_traits::<D19x19u128>();
 }
 
 #[test]
@@ -112,6 +143,8 @@ fn generic_bounds() {
   assert_eq!(holder.value, Price::ONE);
   storage_traits::<U10, U8, i64>();
   layout_traits::<U10, U8, i64>();
+  storage_traits::<U10, U9, u64>();
+  layout_traits::<U10, U9, u64>();
 }
 
 #[test]
@@ -869,4 +902,363 @@ fn errors() {
 
   let errors: [&dyn core::error::Error; 2] = [&empty, &ConvertError::Inexact];
   assert!(errors.iter().all(|err| err.source().is_none()));
+}
+
+#[test]
+fn unsigned_constants() {
+  assert_eq!(D1x1u8::ZERO.repr(), 0);
+  assert_eq!(D1x1u8::MAX.repr(), 99);
+  assert_eq!(D1x1u8::MIN, D1x1u8::ZERO);
+  assert_eq!(D1x1u8::ONE.repr(), 10);
+  assert_eq!(D0x2u8::MAX.repr(), 99);
+  assert_eq!(D2x0u8::ONE.repr(), 1);
+  assert_eq!(D2x2u16::MAX.repr(), 9_999);
+  assert_eq!(D5x4u32::MAX.repr(), 999_999_999);
+  assert_eq!(D10x9u64::MAX.repr(), MAX_19_U64);
+  assert_eq!(D10x9u64::ONE.repr(), 1_000_000_000);
+  assert_eq!(D19x0u64::MAX.repr(), MAX_19_U64);
+  assert_eq!(D19x0u64::MIN, D19x0u64::ZERO);
+  assert_eq!(D19x19u128::MAX.repr(), MAX_38_U128);
+  assert_eq!(D19x19u128::ONE.repr(), TEN_POW_19 as u128);
+  assert_eq!(D38x0u128::MAX.repr(), MAX_38_U128);
+  assert_eq!(D38x0u128::ONE.repr(), 1);
+  assert_eq!(D10x9u64::default(), D10x9u64::ZERO);
+  assert_eq!(D0x2u8::default(), D0x2u8::ZERO);
+}
+
+#[test]
+fn unsigned_predicates() {
+  for (value, zero, positive) in [
+    (D10x9u64::ZERO, true, false),
+    (D10x9u64::ONE, false, true),
+    (D10x9u64::MAX, false, true),
+    (D10x9u64::from_repr(1).unwrap(), false, true),
+  ] {
+    assert_eq!(value.is_zero(), zero);
+    assert_eq!(value.is_positive(), positive);
+  }
+}
+
+#[test]
+fn unsigned_from_repr_checks_the_decimal_range() {
+  assert_eq!(D1x1u8::from_repr(99), Some(D1x1u8::MAX));
+  assert_eq!(D1x1u8::from_repr(0), Some(D1x1u8::ZERO));
+  assert_eq!(D1x1u8::from_repr(100), None);
+  assert_eq!(D1x1u8::from_repr(u8::MAX), None);
+
+  assert_eq!(D10x9u64::from_repr(MAX_19_U64), Some(D10x9u64::MAX));
+  assert_eq!(D10x9u64::from_repr(MAX_19_U64 + 1), None);
+  assert_eq!(D10x9u64::from_repr(u64::MAX), None);
+
+  assert_eq!(D38x0u128::from_repr(MAX_38_U128), Some(D38x0u128::MAX));
+  assert_eq!(D38x0u128::from_repr(MAX_38_U128 + 1), None);
+  assert_eq!(D38x0u128::from_repr(u128::MAX), None);
+}
+
+#[test]
+fn unsigned_parse() {
+  let cases: &[(&str, u16)] = &[
+    ("0", 0),
+    ("00", 0),
+    ("0.0", 0),
+    ("1", 100),
+    ("12.34", 1_234),
+    ("012.30", 1_230),
+    ("0.01", 1),
+    ("99.99", 9_999),
+    ("1.230000", 123),
+  ];
+  for &(input, coeff) in cases {
+    assert_eq!(
+      D2x2u16::parse(input).map(D2x2u16::repr),
+      Ok(coeff),
+      "input {input:?}"
+    );
+    assert_eq!(input.parse::<D2x2u16>().map(D2x2u16::repr), Ok(coeff));
+  }
+
+  // A `-` is invalid syntax, even for zero, and syntax comes before range and exactness.
+  for input in [
+    "-", "-0", "-0.0", "-00", "-1", "-0.01", "-99.99", "-100", "-0.001", "-.5", "--1", "+1",
+  ] {
+    assert_eq!(
+      parse_kind::<D2x2u16>(input),
+      Some(ParseErrorKind::InvalidSyntax),
+      "input {input:?}"
+    );
+  }
+  assert_eq!(parse_kind::<D2x2u16>(""), Some(ParseErrorKind::Empty));
+  assert_eq!(
+    parse_kind::<D2x2u16>("100"),
+    Some(ParseErrorKind::OutOfRange)
+  );
+  assert_eq!(
+    parse_kind::<D2x2u16>("1.234"),
+    Some(ParseErrorKind::Inexact)
+  );
+
+  // Signed storage still reads `-0` as zero.
+  assert_eq!(D2x2::parse("-0"), Ok(D2x2::ZERO));
+  assert_eq!(D2x2::parse("-0.00"), Ok(D2x2::ZERO));
+
+  assert_eq!(D1x1u8::parse("9.9"), Ok(D1x1u8::MAX));
+  assert_eq!(parse_kind::<D1x1u8>("10"), Some(ParseErrorKind::OutOfRange));
+  let max_19 = format!("{}.{}", nines(10), nines(9));
+  assert_eq!(D10x9u64::parse(&max_19), Ok(D10x9u64::MAX));
+  assert_eq!(
+    parse_kind::<D10x9u64>(&format!("1{}", zeros(10))),
+    Some(ParseErrorKind::OutOfRange)
+  );
+  assert_eq!(D19x0u64::parse(&nines(19)), Ok(D19x0u64::MAX));
+  assert_eq!(
+    parse_kind::<D19x0u64>(&nines(20)),
+    Some(ParseErrorKind::OutOfRange)
+  );
+  assert_eq!(D38x0u128::parse(&nines(38)), Ok(D38x0u128::MAX));
+  assert_eq!(
+    parse_kind::<D38x0u128>(&nines(39)),
+    Some(ParseErrorKind::OutOfRange)
+  );
+  assert_eq!(
+    parse_kind::<D38x0u128>(&format!("-{}", nines(38))),
+    Some(ParseErrorKind::InvalidSyntax)
+  );
+}
+
+#[test]
+fn unsigned_checked_add_and_sub() {
+  let ulp = D19x0u64::from_repr(1).unwrap();
+  // 2 * (10^19 - 1) overflows `u64` itself.
+  assert_eq!(D19x0u64::MAX.checked_add(D19x0u64::MAX), None);
+  // 10^19 fits in `u64`, so only the decimal bound rejects it.
+  assert_eq!(D19x0u64::MAX.checked_add(ulp), None);
+  assert_eq!(
+    D19x0u64::MAX.checked_sub(ulp),
+    D19x0u64::from_repr(MAX_19_U64 - 1)
+  );
+  assert_eq!(
+    D19x0u64::MAX.checked_sub(D19x0u64::MAX),
+    Some(D19x0u64::ZERO)
+  );
+  // Below zero.
+  assert_eq!(D19x0u64::ZERO.checked_sub(ulp), None);
+  assert_eq!(ulp.checked_sub(D19x0u64::MAX), None);
+
+  // 99 + 99 fits in `u8`, so only the decimal bound rejects it.
+  assert_eq!(D1x1u8::MAX.checked_add(D1x1u8::MAX), None);
+  assert_eq!(D1x1u8::ZERO.checked_sub(D1x1u8::MAX), None);
+  assert_eq!(D38x0u128::MAX.checked_add(D38x0u128::ONE), None);
+  assert_eq!(
+    D38x0u128::MAX.checked_sub(D38x0u128::ONE),
+    D38x0u128::from_repr(MAX_38_U128 - 1)
+  );
+
+  let a: D10x9u64 = "1.5".parse().unwrap();
+  let b: D10x9u64 = "2.25".parse().unwrap();
+  assert_eq!(a.checked_add(b), Some("3.75".parse().unwrap()));
+  assert_eq!(b.checked_sub(a), Some("0.75".parse().unwrap()));
+  assert_eq!(a.checked_sub(b), None);
+}
+
+#[test]
+fn unsigned_ordering() {
+  let mut values: Vec<D2x2u16> = ["0.01", "99.99", "0", "1", "10.5"]
+    .iter()
+    .map(|s| s.parse().unwrap())
+    .collect();
+  values.sort();
+  let sorted: Vec<String> = values.iter().map(ToString::to_string).collect();
+  assert_eq!(sorted, ["0", "0.01", "1", "10.5", "99.99"]);
+  assert!(D19x19u128::MIN < D19x19u128::MAX);
+}
+
+#[test]
+fn unsigned_methods_in_const_context() {
+  const TICK: D10x9u64 = match D10x9u64::parse("0.000000001") {
+    Ok(tick) => tick,
+    Err(_) => panic!("invalid tick"),
+  };
+  const SUM: Option<D10x9u64> = TICK.checked_add(D10x9u64::ONE);
+  const BELOW_ZERO: Option<D10x9u64> = TICK.checked_sub(D10x9u64::ONE);
+  const SIGNS: [bool; 2] = [TICK.is_zero(), TICK.is_positive()];
+  const COEFF: u64 = TICK.repr();
+  const REJECTED: Result<D10x9u64, ParseError> = D10x9u64::parse("-0");
+
+  assert_eq!(SUM.map(D10x9u64::repr), Some(1_000_000_001));
+  assert_eq!(BELOW_ZERO, None);
+  assert_eq!(SIGNS, [false, true]);
+  assert_eq!(COEFF, 1);
+  assert_eq!(
+    REJECTED.map_err(|err| err.kind()),
+    Err(ParseErrorKind::InvalidSyntax)
+  );
+}
+
+#[test]
+fn unsigned_display() {
+  for (coeff, text) in [
+    (0, "0"),
+    (1, "0.01"),
+    (10, "0.1"),
+    (100, "1"),
+    (1_230, "12.3"),
+    (9_999, "99.99"),
+  ] {
+    let value = D2x2u16::from_repr(coeff).unwrap();
+    assert_eq!(value.to_string(), text);
+    assert_eq!(format!("{value:?}"), text);
+  }
+
+  let value = D2x2u16::from_repr(125).unwrap();
+  assert_eq!(format!("{value:+}"), "+1.25");
+  assert_eq!(format!("{:+}", D2x2u16::ZERO), "+0");
+  assert_eq!(format!("{value:+08.3}"), "+001.250");
+  assert_eq!(format!("{value:08}"), "00001.25");
+  assert_eq!(format!("{value:>7}"), "   1.25");
+
+  assert_eq!(
+    D10x9u64::MAX.to_string(),
+    format!("{}.{}", nines(10), nines(9))
+  );
+  assert_eq!(D19x0u64::MAX.to_string(), nines(19));
+  assert_eq!(D38x0u128::MAX.to_string(), nines(38));
+  assert_eq!(
+    D19x19u128::from_repr(1).unwrap().to_string(),
+    format!("0.{}1", zeros(18))
+  );
+
+  // The flags behave as they do for unsigned integers, including `+`.
+  for value in [0u8, 7, 42, 99] {
+    let decimal = D2x0u8::from_repr(value).unwrap();
+    for (formatted, expected) in [
+      (format!("{decimal}"), format!("{value}")),
+      (format!("{decimal:+}"), format!("{value:+}")),
+      (format!("{decimal:+05}"), format!("{value:+05}")),
+      (format!("{decimal:*^6}"), format!("{value:*^6}")),
+      (format!("{decimal:<4?}"), format!("{value:<4?}")),
+    ] {
+      assert_eq!(formatted, expected);
+    }
+  }
+}
+
+#[test]
+fn exact_mul_storage_follows_the_operand_signs() {
+  // Two unsigned operands give the smallest unsigned storage.
+  let both: Decimal<U2, U2, u16> = D1x1u8::MAX.exact_mul(D1x1u8::MAX);
+  assert_eq!(both.repr(), 9_801);
+  assert_eq!(both.to_string(), "98.01");
+  let square: Decimal<U38, U0, u128> = D19x0u64::MAX.exact_mul(D19x0u64::MAX);
+  assert_eq!(
+    square.repr(),
+    u128::from(MAX_19_U64) * u128::from(MAX_19_U64)
+  );
+  // 19 digits need an `i128` when signed but fit in a `u64`.
+  let nineteen: Decimal<U19, U0, u64> =
+    Decimal::<U18, U0, u64>::MAX.exact_mul(Decimal::<U1, U0, u8>::MAX);
+  assert_eq!(nineteen.repr(), 999_999_999_999_999_999 * 9);
+  let mixed_widths: Decimal<U21, U17, u128> = D10x9u64::MAX.exact_mul(Decimal::<U11, U8, u64>::ONE);
+  assert_eq!(mixed_widths.to_string(), D10x9u64::MAX.to_string());
+
+  // A signed operand on either side gives the smallest signed storage.
+  let signed_first: Decimal<U2, U2, i16> = D1x1::MIN.exact_mul(D1x1u8::MAX);
+  assert_eq!(signed_first.to_string(), "-98.01");
+  let unsigned_first: Decimal<U2, U2, i16> = D1x1u8::MAX.exact_mul(D1x1::MIN);
+  assert_eq!(unsigned_first.to_string(), "-98.01");
+  let wide: Decimal<U20, U17, i128> = D10x9u64::MAX.exact_mul(Price::MIN);
+  assert_eq!(
+    wide.repr(),
+    -(i128::from(MAX_19_U64) * 999_999_999_999_999_999)
+  );
+  // The product of two signed operands keeps the smallest signed storage.
+  let signed: Decimal<U2, U2> = D1x1::MAX.exact_mul(D1x1::MAX);
+  let _: i16 = signed.repr();
+}
+
+#[test]
+fn widen_from_unsigned() {
+  let small: D2x2u16 = "12.5".parse().unwrap();
+  let price: Price = small.widen();
+  assert_eq!(price.repr(), 1_250_000_000);
+  let unsigned: D10x9u64 = small.widen();
+  assert_eq!(unsigned.repr(), 12_500_000_000);
+  let back: D2x2u16 = Decimal::<U2, U2, u128>::MAX.widen();
+  assert_eq!(back, D2x2u16::MAX);
+
+  // A 19-digit `u64` widens to the 19-digit default storage, `i128`.
+  let max: Decimal<U19, U0> = D19x0u64::MAX.widen();
+  assert_eq!(max.repr(), i128::from(MAX_19_U64));
+  let fraction: D19x19 = D10x9u64::MAX.widen();
+  assert_eq!(fraction.to_string(), D10x9u64::MAX.to_string());
+  let unsigned_limit: D19x19u128 = D1x1u8::MAX.widen();
+  assert_eq!(unsigned_limit.to_string(), "9.9");
+}
+
+#[test]
+fn try_convert_with_unsigned_storage() {
+  // A negative value is out of range for an unsigned target, even if it truncates to zero.
+  let negative: D2x2 = "-1.20".parse().unwrap();
+  assert_eq!(
+    negative.try_convert::<U2, U2, u16>(),
+    Err(ConvertError::OutOfRange)
+  );
+  let half: D2x2 = "-0.5".parse().unwrap();
+  assert_eq!(
+    half.try_convert::<U1, U0, u8>(),
+    Err(ConvertError::OutOfRange)
+  );
+  assert_eq!(half.try_convert::<U1, U0, i8>(), Err(ConvertError::Inexact));
+  let tiny: Decimal<U0, U38> = format!("-0.{}1", zeros(37)).parse().unwrap();
+  assert_eq!(
+    tiny.try_convert::<U38, U0, u128>(),
+    Err(ConvertError::OutOfRange)
+  );
+  assert_eq!(
+    D2x2::MIN.try_convert::<U19, U19, u128>(),
+    Err(ConvertError::OutOfRange)
+  );
+
+  // Zero and positive values convert.
+  assert_eq!(
+    D2x2::ZERO.try_convert::<U1, U0, u8>(),
+    Ok(Decimal::<U1, U0, u8>::ZERO)
+  );
+  let positive: D2x2 = "1.20".parse().unwrap();
+  assert_eq!(
+    positive.try_convert::<U1, U1, u8>().map(|v| v.repr()),
+    Ok(12)
+  );
+  assert_eq!(
+    positive.try_convert::<U19, U0, u64>(),
+    Err(ConvertError::Inexact)
+  );
+
+  // From unsigned storage, range and exactness work as for signed storage.
+  assert_eq!(
+    D19x0u64::MAX.try_convert::<U18, U0, i64>(),
+    Err(ConvertError::OutOfRange)
+  );
+  assert_eq!(
+    D19x0u64::MAX
+      .try_convert::<U19, U0, i128>()
+      .map(|v| v.repr()),
+    Ok(i128::from(MAX_19_U64))
+  );
+  assert_eq!(
+    D10x9u64::MAX.try_convert::<U10, U8, i64>(),
+    Err(ConvertError::Inexact)
+  );
+  let value: D10x9u64 = "1234567890.12345678".parse().unwrap();
+  assert_eq!(
+    value.try_convert::<U10, U8, i64>().map(|v| v.repr()),
+    Ok(123_456_789_012_345_678)
+  );
+  assert_eq!(
+    value.try_convert::<U2, U2, u16>(),
+    Err(ConvertError::OutOfRange)
+  );
+  assert_eq!(
+    D38x0u128::MAX.try_convert::<U0, U38, u128>(),
+    Err(ConvertError::OutOfRange)
+  );
 }

@@ -1,0 +1,11 @@
+error[E0600]: cannot apply unary operator `-` to type `Decimal<UInt<UInt<UTerm, B1>, B0>, UInt<UInt<UTerm, B1>, B0>, u16>`
+ --> tests/ui/neg_unsigned.rs:5:18
+  |
+5 |   let _negated = -value;
+  |                  ^^^^^^ cannot apply unary operator `-`
+  |
+note: `Decimal<UInt<UInt<UTerm, B1>, B0>, UInt<UInt<UTerm, B1>, B0>, u16>` does not implement `Neg`
+ --> src/decimal.rs
+  |
+  | pub struct Decimal<Integral, Fraction, Repr = <Sum<Integral, Fraction> as DigitCount>::Signed> {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `Decimal<UInt<UInt<UTerm, B1>, B0>, UInt<UInt<UTerm, B1>, B0>, u16>` is defined in another crate

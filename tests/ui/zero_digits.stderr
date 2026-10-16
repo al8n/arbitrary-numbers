@@ -1,10 +1,10 @@
 error[E0277]: a `Decimal` must have between 1 and 38 digits in total
- --> tests/ui/nightly/too_many_digits.rs:6:18
+ --> tests/ui/zero_digits.rs:3:18
   |
-6 | fn store(_value: Decimal<U20, U19>) {}
-  |                  ^^^^^^^^^^^^^^^^^ `Integral + Fraction` is zero or greater than 38
+3 | fn store(_value: Decimal<U0, U0>) {}
+  |                  ^^^^^^^^^^^^^^^ `Integral + Fraction` is zero or greater than 38
   |
-  = help: the trait `DigitCount` is not implemented for `UInt<UInt<UInt<UInt<UInt<UInt<UTerm, B1>, B0>, B0>, B1>, B1>, B1>`
+  = help: the trait `DigitCount` is not implemented for `UTerm`
   = help: the following other types implement trait `DigitCount`:
             UInt<UInt<UInt<UInt<UInt<UInt<UTerm, B1>, B0>, B0>, B0>, B0>, B0>
             UInt<UInt<UInt<UInt<UInt<UInt<UTerm, B1>, B0>, B0>, B0>, B0>, B1>
@@ -15,9 +15,3 @@ error[E0277]: a `Decimal` must have between 1 and 38 digits in total
             UInt<UInt<UInt<UInt<UInt<UInt<UTerm, B1>, B0>, B0>, B1>, B1>, B0>
             UInt<UInt<UInt<UInt<UInt<UTerm, B1>, B0>, B0>, B0>, B0>
           and $N others
-
-error: the type `Decimal<UInt<UInt<UInt<UInt<UInt<UTerm, B1>, B0>, B1>, B0>, B0>, UInt<UInt<UInt<UInt<UInt<UTerm, B1>, B0>, B0>, B1>, B1>, <UInt<UInt<UInt<UInt<UInt<UInt<UTerm, B1>, B0>, B0>, B1>, B1>, B1> as DigitCount>::Storage>` is not well-formed
- --> tests/ui/nightly/too_many_digits.rs:6:18
-  |
-6 | fn store(_value: Decimal<U20, U19>) {}
-  |                  ^^^^^^^^^^^^^^^^^

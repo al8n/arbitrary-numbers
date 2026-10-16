@@ -1,0 +1,21 @@
+error[E0277]: `widen` cannot convert from the signed storage `i16` to the unsigned storage `u32`
+ --> tests/ui/widen_signed_to_unsigned.rs:7:9
+  |
+7 |   value.widen()
+  |         ^^^^^ the trait `WidenRepr<u32>` is not implemented for `i16`
+  |
+  = note: use `try_convert` for a conversion that can fail
+  = help: `i16` implements trait `WidenRepr<Target>`:
+            WidenRepr<i128>
+            WidenRepr<i16>
+            WidenRepr<i32>
+            WidenRepr<i64>
+            WidenRepr<i8>
+note: required by a bound in `Decimal::<I, F, R>::widen`
+ --> src/decimal.rs
+  |
+  |   pub fn widen<I2, F2, R2>(self) -> Decimal<I2, F2, R2>
+  |          ----- required by a bound in this associated function
+  |   where
+  |     R: WidenRepr<R2>,
+  |        ^^^^^^^^^^^^^ required by this bound in `Decimal::<I, F, R>::widen`

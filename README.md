@@ -67,11 +67,16 @@ fn main() -> Result<(), ParseError> {
 ## `Decimal`
 
 - The value is `c / 10^Fraction`, where the coefficient `c` is stored in `Repr` and
-  `|c| <= 10^(Integral + Fraction) - 1`, like SQL `NUMERIC(Integral + Fraction, Fraction)`. The
-  range is symmetric, and there is no NaN, infinity or negative zero.
-- `Repr` defaults to the smallest signed integer that holds the digits: `i8` up to 2 digits, `i16`
-  up to 4, `i32` up to 9, `i64` up to 18 and `i128` up to 38. A wider `Repr` can be named
-  explicitly. The type has the size, alignment and ABI of `Repr`.
+  `|c| <= 10^(Integral + Fraction) - 1`, like SQL `NUMERIC(Integral + Fraction, Fraction)`. There
+  is no NaN, infinity or negative zero.
+- `Repr` is a signed or unsigned native integer. It defaults to the smallest signed integer that
+  holds the digits: `i8` up to 2 digits, `i16` up to 4, `i32` up to 9, `i64` up to 18 and `i128` up
+  to 38. A wider `Repr` can be named explicitly, and so can an unsigned one: `u8` up to 2 digits,
+  `u16` up to 4, `u32` up to 9, `u64` up to 19 and `u128` up to 38. The type has the size,
+  alignment and ABI of `Repr`.
+- With a signed `Repr`, the range is symmetric and `Neg` is implemented. With an unsigned `Repr`,
+  values run from zero to `MAX`, there is no negation, `checked_sub` returns `None` below zero,
+  and parsing rejects any `-`, even in `-0`.
 - Zero digits, more than 38 digits, or a `Repr` that is too small are rejected during type
   checking. With the default `Repr`, zero or more than 38 digits fail wherever the type is
   written; with an explicit `Repr`, the type's constants and constructors fail, so no value of it
@@ -81,10 +86,14 @@ fn main() -> Result<(), ParseError> {
   `exact_mul` returns a wider type that always holds the product, `widen` converts to a type with
   at least as many digits, and `try_convert` reports `OutOfRange` or `Inexact` instead of
   rounding. There are no `+`, `-`, `*` or `/` operators.
+- Conversions follow the sign of the storage. The product of two unsigned storages is unsigned,
+  and any other product is signed. `widen` converts an unsigned storage to any storage, but a
+  signed storage only to a signed one. `try_convert` reports a negative value converted to an
+  unsigned storage as `OutOfRange`.
 - Methods that depend only on the storage are `const fn`, so constants can be parsed and computed
   at compile time.
-- `parse` accepts `["-"] 1*DIGIT ["." 1*DIGIT]` in ASCII, and `Display` writes the shortest exact
-  text. Format precision pads with zeros but never rounds.
+- `parse` accepts `["-"] 1*DIGIT ["." 1*DIGIT]` in ASCII, without the `-` for an unsigned `Repr`,
+  and `Display` writes the shortest exact text. Format precision pads with zeros but never rounds.
 
 #### License
 

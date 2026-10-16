@@ -1,10 +1,11 @@
 //! Exact fixed-point decimal numbers whose digit counts are part of the type.
 //!
-//! [`Decimal<Integral, Fraction, Repr>`](Decimal) stores the value `c / 10^Fraction` as a signed
-//! integer coefficient `c` of type `Repr`, with `|c| <= 10^(Integral + Fraction) - 1`. The digit
-//! counts are [`typenum`] numbers, so capacity is checked during type checking: no value can be
-//! created for a type with more than 38 digits or with a `Repr` that cannot hold its digits.
-//! `Repr` defaults to the smallest signed integer that holds the digits.
+//! [`Decimal<Integral, Fraction, Repr>`](Decimal) stores the value `c / 10^Fraction` as an integer
+//! coefficient `c` of type `Repr`, with `|c| <= 10^(Integral + Fraction) - 1`. The digit counts
+//! are [`typenum`] numbers, so capacity is checked during type checking: no value can be created
+//! for a type with more than 38 digits or with a `Repr` that cannot hold its digits. `Repr`
+//! defaults to the smallest signed integer that holds the digits; an unsigned `Repr`, such as
+//! `u64` for up to 19 digits, gives a type whose values are never negative.
 //!
 //! ```
 //! use arbitrary_numbers::{
@@ -51,7 +52,7 @@ extern crate std;
 pub use typenum;
 
 pub use decimal::{ConvertError, Decimal, ParseError, ParseErrorKind};
-pub use layout::{DigitCount, FitsDigits, Layout, Storage, Widen};
+pub use layout::{DigitCount, FitsDigits, Layout, Pick, Storage, Widen, WidenRepr};
 
 mod decimal;
 mod int;

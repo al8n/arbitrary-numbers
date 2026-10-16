@@ -2,11 +2,14 @@
 //!
 //! Coefficients come from three sources: random digit strings biased toward `0` and `9`, random
 //! bit patterns scaled to the decimal bound, and the edges of the range. Parsing is checked against
-//! an independent implementation of the grammar on random digit strings and on random text.
+//! an independent implementation of the grammar on random digit strings and on random text. Each
+//! suite covers one decimal type, with a signed or an unsigned storage.
 
 use arbitrary_numbers::{
   ConvertError, Decimal, ParseErrorKind,
-  typenum::{U0, U1, U2, U3, U4, U5, U6, U7, U8, U10, U12, U16, U19, U22, U36, U38},
+  typenum::{
+    U0, U1, U2, U3, U4, U5, U6, U7, U8, U9, U10, U11, U12, U14, U16, U17, U19, U20, U22, U36, U38,
+  },
 };
 use num_bigint::{BigInt, Sign};
 use proptest::{prelude::*, test_runner::RngSeed};
@@ -64,12 +67,19 @@ fn oracle_text(coeff: &BigInt, fraction: u32, precision: usize) -> String {
   text
 }
 
-/// The coefficient that `input` denotes for `integral` and `fraction` digits.
-fn oracle_parse(input: &str, integral: u32, fraction: u32) -> Result<BigInt, ParseErrorKind> {
+/// The coefficient that `input` denotes for `integral` and `fraction` digits, where only a signed
+/// storage accepts a `-`.
+fn oracle_parse(
+  input: &str,
+  integral: u32,
+  fraction: u32,
+  signed: bool,
+) -> Result<BigInt, ParseErrorKind> {
   if input.is_empty() {
     return Err(ParseErrorKind::Empty);
   }
   let (negative, body) = match input.strip_prefix('-') {
+    Some(_) if !signed => return Err(ParseErrorKind::InvalidSyntax),
     Some(rest) => (true, rest),
     None => (false, input),
   };
@@ -102,8 +112,19 @@ fn oracle_parse(input: &str, integral: u32, fraction: u32) -> Result<BigInt, Par
   Ok(if negative { -magnitude } else { magnitude })
 }
 
-/// The result of converting `coeff` from `from` to `to` fraction digits with `digits` in total.
-fn oracle_convert(coeff: &BigInt, from: u32, to: u32, digits: u32) -> Result<BigInt, ConvertError> {
+/// The result of converting `coeff` from `from` to `to` fraction digits, for a target with
+/// `digits` digits in total and a signed or an unsigned storage.
+fn oracle_convert(
+  coeff: &BigInt,
+  from: u32,
+  to: u32,
+  digits: u32,
+  signed: bool,
+) -> Result<BigInt, ConvertError> {
+  // A negative value has no unsigned representation, however many digits are dropped.
+  if !signed && coeff.sign() == Sign::Minus {
+    return Err(ConvertError::OutOfRange);
+  }
   let converted = if to >= from {
     coeff * pow10(to - from)
   } else {
@@ -135,7 +156,13 @@ fn digit_text(max_len: usize) -> impl Strategy<Value = String> {
 }
 
 macro_rules! suite {
-  ($name:ident: $ty:ty, $repr:ident, integral = $integral:literal, fraction = $fraction:literal) => {
+  (
+    $name:ident: $ty:ty,
+    $repr:ident,
+    $sign:ident,
+    integral = $integral:literal,
+    fraction = $fraction:literal
+  ) => {
     mod $name {
       use super::*;
 
@@ -143,6 +170,7 @@ macro_rules! suite {
       pub(super) const INTEGRAL: u32 = $integral;
       pub(super) const FRACTION: u32 = $fraction;
       pub(super) const DIGITS: u32 = $integral + $fraction;
+      pub(super) const SIGNED: bool = suite!(@signed $sign);
 
       pub(super) fn big(value: T) -> BigInt {
         BigInt::from(value.repr())
@@ -166,20 +194,18 @@ macro_rules! suite {
         }
         values
           .into_iter()
-          .filter(|value| value.unsigned_abs() <= max as u128)
+          .filter(|&value| value.unsigned_abs() <= max as u128 && (SIGNED || value >= 0))
           .map(|value| value as $repr)
           .collect()
       }
 
       pub(super) fn coeff() -> BoxedStrategy<$repr> {
-        let digits = (any::<bool>(), digit_text(DIGITS as usize)).prop_map(|(negative, text)| {
-          let magnitude: $repr = text.parse().expect("at most DIGITS digits fit");
-          if negative { -magnitude } else { magnitude }
-        });
-        // Arithmetic shifts keep the random sign and low bits while bringing the magnitude close
-        // to the decimal bound, which needs `bound_bits` bits.
+        let digits = suite!(@digits $sign, $repr);
+        // Shifts keep random low bits, and a random sign for a signed storage, while bringing the
+        // magnitude close to the decimal bound, which needs `bound_bits` bits.
         let bound_bits = max_coeff(DIGITS).bits() as u32;
-        let min_shift = ($repr::BITS - 1).saturating_sub(bound_bits);
+        let value_bits = if SIGNED { $repr::BITS - 1 } else { $repr::BITS };
+        let min_shift = value_bits.saturating_sub(bound_bits);
         let bits = (any::<$repr>(), min_shift..$repr::BITS).prop_filter_map(
           "outside the decimal range",
           |(bits, shift)| {
@@ -214,14 +240,11 @@ macro_rules! suite {
           let (big_a, big_b) = (big(a), big(b));
           prop_assert_eq!(a.checked_add(b).map(big), from_big(&(&big_a + &big_b)).map(big));
           prop_assert_eq!(a.checked_sub(b).map(big), from_big(&(&big_a - &big_b)).map(big));
-          prop_assert_eq!(big(a.neg()), -&big_a);
-          prop_assert_eq!(big(-a), -&big_a);
-          prop_assert_eq!(big(a.abs()), BigInt::from(big_a.magnitude().clone()));
           prop_assert_eq!(a.cmp(&b), big_a.cmp(&big_b));
           prop_assert_eq!(a == b, big_a == big_b);
           prop_assert_eq!(a.is_zero(), big_a.sign() == Sign::NoSign);
-          prop_assert_eq!(a.is_negative(), big_a.sign() == Sign::Minus);
           prop_assert_eq!(a.is_positive(), big_a.sign() == Sign::Plus);
+          suite!(@signed_arithmetic $sign, a, big_a);
         }
 
         #[test]
@@ -246,12 +269,12 @@ macro_rules! suite {
           // Zero padding goes after the sign, so the padded text is still valid input.
           prop_assert_eq!(format!("{a:0width$.precision$}").parse::<T>(), Ok(a));
           // The input grammar has no `+`.
-          let signed = format!("{a:+}");
-          if a.is_negative() {
-            prop_assert_eq!(signed.parse::<T>(), Ok(a));
+          let with_sign = format!("{a:+}");
+          if big(a).sign() == Sign::Minus {
+            prop_assert_eq!(with_sign.parse::<T>(), Ok(a));
           } else {
             prop_assert_eq!(
-              signed.parse::<T>().map_err(|err| err.kind()),
+              with_sign.parse::<T>().map_err(|err| err.kind()),
               Err(ParseErrorKind::InvalidSyntax)
             );
           }
@@ -268,7 +291,7 @@ macro_rules! suite {
             if negative { "-" } else { "" },
             fraction.map(|digits| format!(".{digits}")).unwrap_or_default(),
           );
-          let expected = oracle_parse(&input, INTEGRAL, FRACTION);
+          let expected = oracle_parse(&input, INTEGRAL, FRACTION, SIGNED);
           let actual = T::parse(&input).map(big).map_err(|err| err.kind());
           prop_assert_eq!(actual, expected, "input {:?}", input);
         }
@@ -277,29 +300,65 @@ macro_rules! suite {
         fn parse_matches_the_oracle_on_random_text(
           input in "[-+0-9.eE_ x\u{663}\u{ff11}]{0,12}",
         ) {
-          let expected = oracle_parse(&input, INTEGRAL, FRACTION);
+          let expected = oracle_parse(&input, INTEGRAL, FRACTION, SIGNED);
           let actual = T::parse(&input).map(big).map_err(|err| err.kind());
           prop_assert_eq!(actual, expected, "input {:?}", input);
         }
       }
     }
   };
+
+  (@signed signed) => {
+    true
+  };
+  (@signed unsigned) => {
+    false
+  };
+
+  (@digits signed, $repr:ident) => {
+    (any::<bool>(), digit_text(DIGITS as usize)).prop_map(|(negative, text)| {
+      let magnitude: $repr = text.parse().expect("at most DIGITS digits fit");
+      if negative { -magnitude } else { magnitude }
+    })
+  };
+  (@digits unsigned, $repr:ident) => {
+    digit_text(DIGITS as usize)
+      .prop_map(|text| text.parse::<$repr>().expect("at most DIGITS digits fit"))
+  };
+
+  (@signed_arithmetic signed, $a:ident, $big_a:ident) => {
+    prop_assert_eq!(big($a.neg()), -&$big_a);
+    prop_assert_eq!(big(-$a), -&$big_a);
+    prop_assert_eq!(big($a.abs()), BigInt::from($big_a.magnitude().clone()));
+    prop_assert_eq!($a.is_negative(), $big_a.sign() == Sign::Minus);
+  };
+  (@signed_arithmetic unsigned, $a:ident, $big_a:ident) => {};
 }
 
-suite!(d1x1: Decimal<U1, U1>, i8, integral = 1, fraction = 1);
-suite!(d0x2: Decimal<U0, U2>, i8, integral = 0, fraction = 2);
-suite!(d2x0: Decimal<U2, U0>, i8, integral = 2, fraction = 0);
-suite!(d3x1: Decimal<U3, U1>, i16, integral = 3, fraction = 1);
-suite!(d4x5: Decimal<U4, U5>, i32, integral = 4, fraction = 5);
-suite!(d10x8: Decimal<U10, U8>, i64, integral = 10, fraction = 8);
-suite!(d12x8: Decimal<U12, U8>, i128, integral = 12, fraction = 8);
-suite!(d19x0: Decimal<U19, U0>, i128, integral = 19, fraction = 0);
-suite!(d19x19: Decimal<U19, U19>, i128, integral = 19, fraction = 19);
-suite!(d38x0: Decimal<U38, U0>, i128, integral = 38, fraction = 0);
-suite!(d0x38: Decimal<U0, U38>, i128, integral = 0, fraction = 38);
-suite!(wide: Decimal<U10, U8, i128>, i128, integral = 10, fraction = 8);
-suite!(d2x2_in_i64: Decimal<U2, U2, i64>, i64, integral = 2, fraction = 2);
-suite!(d0x36: Decimal<U0, U36>, i128, integral = 0, fraction = 36);
+suite!(d1x1: Decimal<U1, U1>, i8, signed, integral = 1, fraction = 1);
+suite!(d0x2: Decimal<U0, U2>, i8, signed, integral = 0, fraction = 2);
+suite!(d2x0: Decimal<U2, U0>, i8, signed, integral = 2, fraction = 0);
+suite!(d3x1: Decimal<U3, U1>, i16, signed, integral = 3, fraction = 1);
+suite!(d4x5: Decimal<U4, U5>, i32, signed, integral = 4, fraction = 5);
+suite!(d10x8: Decimal<U10, U8>, i64, signed, integral = 10, fraction = 8);
+suite!(d12x8: Decimal<U12, U8>, i128, signed, integral = 12, fraction = 8);
+suite!(d19x0: Decimal<U19, U0>, i128, signed, integral = 19, fraction = 0);
+suite!(d19x19: Decimal<U19, U19>, i128, signed, integral = 19, fraction = 19);
+suite!(d38x0: Decimal<U38, U0>, i128, signed, integral = 38, fraction = 0);
+suite!(d0x38: Decimal<U0, U38>, i128, signed, integral = 0, fraction = 38);
+suite!(wide: Decimal<U10, U8, i128>, i128, signed, integral = 10, fraction = 8);
+suite!(d2x2_in_i64: Decimal<U2, U2, i64>, i64, signed, integral = 2, fraction = 2);
+suite!(d0x36: Decimal<U0, U36>, i128, signed, integral = 0, fraction = 36);
+
+suite!(u1x1: Decimal<U1, U1, u8>, u8, unsigned, integral = 1, fraction = 1);
+suite!(u0x2: Decimal<U0, U2, u8>, u8, unsigned, integral = 0, fraction = 2);
+suite!(u3x1: Decimal<U3, U1, u16>, u16, unsigned, integral = 3, fraction = 1);
+suite!(u4x5: Decimal<U4, U5, u32>, u32, unsigned, integral = 4, fraction = 5);
+suite!(u10x0: Decimal<U10, U0, u64>, u64, unsigned, integral = 10, fraction = 0);
+suite!(u10x9: Decimal<U10, U9, u64>, u64, unsigned, integral = 10, fraction = 9);
+suite!(u19x0: Decimal<U19, U0, u64>, u64, unsigned, integral = 19, fraction = 0);
+suite!(u19x19: Decimal<U19, U19, u128>, u128, unsigned, integral = 19, fraction = 19);
+suite!(u38x0: Decimal<U38, U0, u128>, u128, unsigned, integral = 38, fraction = 0);
 
 macro_rules! exact_mul {
   ($name:ident: $lhs:ident * $rhs:ident = $product:ty) => {
@@ -328,6 +387,16 @@ exact_mul!(mul_i128_limit: d19x0 * d19x0 = Decimal<U38, U0>);
 exact_mul!(mul_fraction_limit: d0x2 * d0x36 = Decimal<U0, U38>);
 exact_mul!(mul_explicit_storage: wide * d2x2_in_i64 = Decimal<U12, U10>);
 
+// Two unsigned storages give the smallest unsigned storage for the product's digits.
+exact_mul!(mul_u8_limit: u1x1 * u1x1 = Decimal<U2, U2, u16>);
+exact_mul!(mul_u16_by_u32: u3x1 * u4x5 = Decimal<U7, U6, u64>);
+exact_mul!(mul_u64_limit: u4x5 * u10x0 = Decimal<U14, U5, u64>);
+exact_mul!(mul_u128_limit: u19x0 * u19x0 = Decimal<U38, U0, u128>);
+exact_mul!(mul_unsigned_fraction: u10x9 * u0x2 = Decimal<U10, U11, u128>);
+// A signed storage on either side gives the smallest signed storage.
+exact_mul!(mul_signed_by_unsigned: d1x1 * u1x1 = Decimal<U2, U2, i16>);
+exact_mul!(mul_unsigned_by_signed: u10x9 * d10x8 = Decimal<U20, U17, i128>);
+
 macro_rules! convert {
   ($name:ident: $source:ident -> $target:ident) => {
     proptest! {
@@ -340,6 +409,7 @@ macro_rules! convert {
           $source::FRACTION,
           $target::FRACTION,
           $target::DIGITS,
+          $target::SIGNED,
         );
         let actual: Result<$target::T, ConvertError> = a.try_convert();
         prop_assert_eq!(actual.map($target::big), expected);
@@ -359,6 +429,15 @@ convert!(convert_to_more_fraction_digits: d0x2 -> d0x38);
 convert!(convert_integral_to_fraction: d38x0 -> d0x38);
 convert!(convert_fraction_to_integral: d0x38 -> d38x0);
 convert!(convert_mixed: d4x5 -> d3x1);
+
+convert!(convert_signed_to_unsigned: d10x8 -> u10x9);
+convert!(convert_signed_fraction_to_unsigned: d0x38 -> u1x1);
+convert!(convert_signed_integral_to_unsigned: d38x0 -> u19x0);
+convert!(convert_unsigned_to_signed: u19x0 -> d19x0);
+convert!(convert_unsigned_to_narrower_signed: u10x9 -> d10x8);
+convert!(convert_unsigned_to_fewer_digits: u19x19 -> u1x1);
+convert!(convert_unsigned_to_more_digits: u1x1 -> u19x19);
+convert!(convert_unsigned_integral_to_fraction: u38x0 -> u19x19);
 
 macro_rules! widen {
   ($name:ident: $source:ident -> $target:ident) => {
@@ -382,3 +461,9 @@ widen!(widen_i8_to_i128_limit: d1x1 -> d19x19);
 widen!(widen_fraction_digits: d0x2 -> d0x38);
 widen!(widen_integral_only: d2x0 -> d38x0);
 widen!(widen_both: d2x2_in_i64 -> d4x5);
+
+widen!(widen_u8_to_i8: u1x1 -> d1x1);
+widen!(widen_u64_limit_to_i128: u19x0 -> d19x0);
+widen!(widen_unsigned_to_signed: u10x9 -> d19x19);
+widen!(widen_unsigned_storage: u10x9 -> u19x19);
+widen!(widen_unsigned_fraction_digits: u0x2 -> u19x19);

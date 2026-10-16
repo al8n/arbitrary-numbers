@@ -16,19 +16,29 @@ pub(super) struct Digits {
   pub(super) padding: u32,
 }
 
-/// Validates `input` for a decimal with `integral` integral and `fraction` fraction digits.
+/// Validates `input` for a decimal with `integral` integral and `fraction` fraction digits, and
+/// a sign only if `signed`.
 ///
 /// Errors are reported in priority order: `Empty`; `InvalidSyntax` if any byte breaks
-/// `["-"] 1*DIGIT ["." 1*DIGIT]`; `OutOfRange` if the integral part has more than `integral`
-/// digits after its leading zeros; `Inexact` if a fraction digit after the first `fraction` is not
-/// `0`. Runs in linear time and constant space.
-pub(super) const fn scan(input: &[u8], integral: u32, fraction: u32) -> Result<Digits, ParseError> {
+/// `["-"] 1*DIGIT ["." 1*DIGIT]`, or if the input starts with `-` and `signed` is `false`;
+/// `OutOfRange` if the integral part has more than `integral` digits after its leading zeros;
+/// `Inexact` if a fraction digit after the first `fraction` is not `0`. Runs in linear time and
+/// constant space.
+pub(super) const fn scan(
+  input: &[u8],
+  integral: u32,
+  fraction: u32,
+  signed: bool,
+) -> Result<Digits, ParseError> {
   let len = input.len();
   if len == 0 {
     return Err(ParseError::new(ParseErrorKind::Empty));
   }
 
   let negative = input[0] == b'-';
+  if negative && !signed {
+    return Err(ParseError::new(ParseErrorKind::InvalidSyntax));
+  }
   let mut pos = if negative { 1 } else { 0 };
 
   let digits_start = pos;
