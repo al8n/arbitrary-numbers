@@ -19,8 +19,8 @@ use crate::{
 
 mod error;
 mod format;
-mod native;
 mod parse;
+mod storage;
 
 #[cfg(test)]
 mod tests;
@@ -37,32 +37,37 @@ mod tests;
 /// coefficients.
 ///
 /// `Integral` and `Fraction` are [`typenum`] numbers such as `U8` or `U<8>`. `Repr` defaults to
-/// the smallest signed integer that holds `Integral + Fraction` digits (see [`DigitCount`]). Any
-/// other storage that holds them can be named explicitly: a wider one, or an unsigned one for
+/// the smallest signed integer that holds `Integral + Fraction` digits (see [`DigitCount`]): a
+/// native integer up to 38 digits, and beyond that the wide integers [`i192`](crate::i192),
+/// [`i256`](crate::i256) and [`i320`](crate::i320), which hold 57, 76 and 96 digits. Any other
+/// storage that holds the digits can be named explicitly: a wider one, or an unsigned one for
 /// values that are never negative. An unsigned `Repr` holds as many digits as the signed one of
-/// the same width, except that `u64` holds 19 digits and `i64` 18. The type has the size,
-/// alignment and ABI of `Repr`.
+/// the same width, except that `u64` holds 19 digits and `i64` 18, and [`u256`](crate::u256)
+/// holds 77 and `i256` 76. The type has the size, alignment and ABI of `Repr`.
 ///
 /// ```
 /// use arbitrary_numbers::{
 ///   Decimal,
-///   typenum::{U8, U9, U10, U12},
+///   typenum::{U8, U9, U10, U12, U18, U60},
+///   u320,
 /// };
 ///
 /// type Price = Decimal<U10, U8>; // 18 digits, stored in an `i64`
 /// type Quantity = Decimal<U12, U8>; // 20 digits, stored in an `i128`
 /// type WidePrice = Decimal<U10, U8, i128>; // 18 digits in an explicitly chosen `i128`
 /// type Volume = Decimal<U10, U9, u64>; // 19 digits, never negative, in a `u64`
+/// type TokenAmount = Decimal<U60, U18, u320>; // 78 digits, never negative, in a `u320`
 ///
 /// assert_eq!(size_of::<Price>(), 8);
 /// assert_eq!(size_of::<Quantity>(), 16);
 /// assert_eq!(size_of::<WidePrice>(), 16);
 /// assert_eq!(size_of::<Volume>(), 8);
+/// assert_eq!(size_of::<TokenAmount>(), 40);
 /// ```
 ///
-/// A combination that does not fit is rejected during type checking: zero digits, more than 38
+/// A combination that does not fit is rejected during type checking: zero digits, more than 96
 /// digits, or a `Repr` too small for `Integral + Fraction` digits. With the default `Repr`, zero
-/// digits or more than 38 digits fail wherever the type is written, because the default storage
+/// digits or more than 96 digits fail wherever the type is written, because the default storage
 /// must be computed. With an explicit `Repr`, a combination that does not fit can be written, but
 /// its constants and constructors fail to compile, so no value of the type can be created.
 ///
@@ -97,6 +102,30 @@ mod tests;
 /// [`widen`](Self::widen) converts an unsigned storage to any storage but a signed storage only to
 /// a signed one; and [`try_convert`](Self::try_convert) reports a negative value converted to an
 /// unsigned storage as out of range.
+///
+/// A wide coefficient is built from 64-bit limbs, least significant first, and
+/// [`from_repr`](Self::from_repr) checks its range. Any uint256 amount, which has at most 78
+/// digits, fits a [`u320`](crate::u320):
+///
+/// ```
+/// use arbitrary_numbers::{
+///   Decimal,
+///   typenum::{U18, U60},
+///   u320,
+/// };
+///
+/// type TokenAmount = Decimal<U60, U18, u320>;
+///
+/// // The raw amount 1.5 * 10^18 as a uint256.
+/// let raw: [u64; 4] = [1_500_000_000_000_000_000, 0, 0, 0];
+/// let [l0, l1, l2, l3] = raw;
+/// let amount = TokenAmount::from_repr(u320::from_limbs([l0, l1, l2, l3, 0])).unwrap();
+/// assert_eq!(amount.to_string(), "1.5");
+///
+/// // The same amount from its decimal digits and an exponent.
+/// assert_eq!("1500000000000000000e-18".parse::<TokenAmount>()?, amount);
+/// # Ok::<(), arbitrary_numbers::ParseError>(())
+/// ```
 ///
 /// Methods whose behavior depends only on the storage are `const fn`, generated for each storage,
 /// so values can be computed at compile time:
@@ -193,6 +222,7 @@ where
   const DIGITS: u32 = <(I, F) as SealedLayout<R>>::DIGITS;
 }
 
+// Not `const`: storage-generic code calls trait methods, which cannot be `const` (E0015).
 impl<I, F, R> Decimal<I, F, R>
 where
   R: Storage,
@@ -202,13 +232,13 @@ where
   /// The result has `Integral + I2` integral digits and `Fraction + F2` fraction digits, so the
   /// product always fits and is never rounded. It is stored in the smallest unsigned storage for
   /// its digits if both operands have unsigned storages, and in the smallest signed storage for
-  /// its digits otherwise (see [`DigitCount`] and [`Pick`]). A product type with more than 38
-  /// digits fails to compile.
+  /// its digits otherwise (see [`DigitCount`] and [`Pick`]). A product type with more than 96
+  /// digits fails to compile; [`try_convert`](Self::try_convert) can narrow an operand first.
   ///
   /// ```
   /// use arbitrary_numbers::{
-  ///   Decimal,
-  ///   typenum::{U8, U9, U10, U11, U12, U16, U17, U21, U22},
+  ///   Decimal, i256,
+  ///   typenum::{U8, U9, U10, U11, U12, U16, U17, U19, U21, U22, U38},
   /// };
   ///
   /// let price: Decimal<U10, U8> = "64250.5".parse()?;
@@ -221,6 +251,11 @@ where
   /// let quantity: Decimal<U11, U8, u64> = "0.0015".parse()?;
   /// let notional: Decimal<U21, U17, u128> = price.exact_mul(quantity);
   /// assert_eq!(notional.to_string(), "96.37575");
+  ///
+  /// // Two 38-digit operands give a 76-digit product in a wide storage.
+  /// let large: Decimal<U19, U19> = "-1e18".parse()?;
+  /// let square: Decimal<U38, U38, i256> = large.exact_mul(large);
+  /// assert_eq!(square.to_string(), "1000000000000000000000000000000000000");
   /// # Ok::<(), arbitrary_numbers::ParseError>(())
   /// ```
   #[must_use]
@@ -245,15 +280,18 @@ where
     And<R::IsUnsigned, R2::IsUnsigned>: Pick<Sum<Sum<I, I2>, Sum<F, F2>>>,
   {
     // Every value has at most the digits of its type: the other constructors require the layout
-    // of the type they create, and a product has at most as many digits as its operands
-    // together, which is the digit count of its type. `DigitCount` caps that count at 38, so the
-    // product is below 10^38 < 2^127 and fits the storage that `Pick` chooses for it. That
-    // storage is unsigned only if both operands are, and then the product is not negative.
-    let product = int::i128::mul(self.repr.to_i128(), rhs.repr.to_i128());
-    Decimal::from_coeff(SealedStorage::from_i128(product))
+    // of the type they create. The product type has at least as many digits as either operand
+    // type, and its storage, which `Pick` chooses, is unsigned only if both operand storages are,
+    // so both operands convert to it exactly. Their product has at most as many digits as the
+    // operands together, which is the digit count of its type, so it fits that storage as well.
+    // Between native storages, the conversions are casts and the multiplication is native.
+    let lhs = self.repr.convert();
+    let rhs = rhs.repr.convert();
+    Decimal::from_coeff(SealedStorage::mul(lhs, rhs))
   }
 }
 
+// Not `const`: storage-generic code calls trait methods, which cannot be `const` (E0015).
 impl<I, F, R> Decimal<I, F, R>
 where
   R: Storage,
@@ -289,11 +327,12 @@ where
     (I2, F2): Layout<R2>,
     (I, F): Widen<(I2, F2)>,
   {
-    // `I2 >= I` and `F2 >= F`, so the scaled coefficient has at most `I2 + F2` digits. `R2` is
-    // unsigned only if `R` is, and then the coefficient is not negative.
+    // `I2 >= I` and `F2 >= F`, so `R2` holds the coefficient, and the scaled coefficient has at
+    // most `I + F2 <= I2 + F2` digits. `R2` is unsigned only if `R` is, and then the coefficient
+    // is not negative.
     let scale = Decimal::<I2, F2, R2>::FRACTION - Self::FRACTION;
-    let coeff = int::i128::mul_pow10(self.repr.to_i128(), scale);
-    Decimal::from_coeff(R2::from_i128(coeff))
+    let coeff: R2 = self.repr.convert();
+    Decimal::from_coeff(coeff.mul_pow10(scale))
   }
 
   /// Converts to any decimal type, failing instead of losing digits.
@@ -345,40 +384,46 @@ where
     R2: Storage,
     (I2, F2): Layout<R2>,
   {
-    let coeff = self.repr.to_i128();
     // Checked before scaling, so that a negative value that truncates to zero, such as `-0.5`,
-    // is out of range rather than inexact. With this check, the range below is `0..=max` for an
-    // unsigned target, and `R2::from_i128` never receives a negative value for one.
-    if int::i128::is_negative(coeff) && !R2::SIGNED {
+    // is out of range rather than inexact. A value that remains is never negative for an unsigned
+    // target.
+    if self.repr.is_negative() && !R2::SIGNED {
       return Err(ConvertError::OutOfRange);
     }
     let from = Self::FRACTION;
     let to = Decimal::<I2, F2, R2>::FRACTION;
-    let max = int::i128::max_magnitude(Decimal::<I2, F2, R2>::DIGITS);
+    let digits = Decimal::<I2, F2, R2>::DIGITS;
+    // The range is checked in `R2`: `10^(I2 + F2) - 1` may not fit `R`, as for a 6-digit `i32`
+    // source and a 40-digit `i192` target. The powers of ten that the scaling uses fit their
+    // storages, because a storage that holds `d` digits also holds `10^d`, which is not a power
+    // of two.
     let converted = if to >= from {
-      match int::i128::checked_mul_pow10(coeff, to - from) {
-        Some(scaled) if within(scaled, max) => scaled,
-        _ => return Err(ConvertError::OutOfRange),
+      // Scaled in `R2`, which holds every scaled value in range, while `R` may not. A value that
+      // `R2` cannot hold is out of range even before scaling.
+      match self.repr.checked_convert::<R2>() {
+        Some(coeff) => match coeff.checked_mul_pow10(to - from) {
+          Some(scaled) if scaled.within_digits(digits) => scaled,
+          _ => return Err(ConvertError::OutOfRange),
+        },
+        None => return Err(ConvertError::OutOfRange),
       }
     } else {
-      // The truncated quotient is within `max` exactly when the value's integral part has at
-      // most `I2` digits, so range is decided before exactness.
-      let (quotient, remainder) = int::i128::div_rem_pow10(coeff, from - to);
-      if !within(quotient, max) {
-        return Err(ConvertError::OutOfRange);
+      // Divided in `R`, which holds `10^(from - to)`. The truncated quotient is in range exactly
+      // when the value's integral part has at most `I2` digits, so range is decided before
+      // exactness.
+      let (quotient, remainder) = self.repr.div_rem_pow10(from - to);
+      match quotient.checked_convert::<R2>() {
+        Some(quotient) if quotient.within_digits(digits) => {
+          if !remainder.is_zero() {
+            return Err(ConvertError::Inexact);
+          }
+          quotient
+        }
+        _ => return Err(ConvertError::OutOfRange),
       }
-      if !int::i128::is_zero(remainder) {
-        return Err(ConvertError::Inexact);
-      }
-      quotient
     };
-    Ok(Decimal::from_coeff(R2::from_i128(converted)))
+    Ok(Decimal::from_coeff(converted))
   }
-}
-
-/// Returns `true` if `|value| <= max`, for `max >= 0`.
-const fn within(value: i128, max: i128) -> bool {
-  int::i128::le(int::i128::neg(max), value) && int::i128::le(value, max)
 }
 
 impl<I, F, R> Clone for Decimal<I, F, R>

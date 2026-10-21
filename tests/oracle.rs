@@ -6,13 +6,16 @@
 //! infinities and NaNs, on sequences of grammar tokens and on random text, and directly against
 //! `f64::from_str` on token sequences, rendered `f64` text, `f64`'s documented grammar and near
 //! misses of it; every value must read back from its text, also when that text is rewritten with
-//! an exponent. Each suite covers one decimal type, with a signed or an unsigned storage.
+//! an exponent. Each suite covers one decimal type, with a signed or an unsigned storage, native or
+//! wide.
 
 use arbitrary_numbers::{
-  ConvertError, Decimal, ParseErrorKind,
+  ConvertError, Decimal, ParseErrorKind, i192, i256, i320,
   typenum::{
-    U0, U1, U2, U3, U4, U5, U6, U7, U8, U9, U10, U11, U12, U14, U16, U17, U19, U20, U22, U36, U38,
+    U0, U1, U2, U3, U4, U5, U6, U7, U8, U9, U10, U11, U12, U14, U16, U17, U18, U19, U20, U22, U26,
+    U36, U37, U38, U39, U49, U58, U59, U60, U61, U69, U76, U78, U96,
   },
+  u192, u256, u320,
 };
 use num_bigint::{BigInt, Sign};
 use proptest::{prelude::*, test_runner::RngSeed};
@@ -41,6 +44,102 @@ fn max_coeff(digits: u32) -> BigInt {
 fn in_range(coeff: &BigInt, digits: u32) -> bool {
   coeff.magnitude() <= max_coeff(digits).magnitude()
 }
+
+/// The integer that `limbs` holds, least significant limb first, in two's complement if `signed`.
+fn limbs_to_big(limbs: &[u64], signed: bool) -> BigInt {
+  let bytes: Vec<u8> = limbs.iter().flat_map(|limb| limb.to_le_bytes()).collect();
+  if signed {
+    BigInt::from_signed_bytes_le(&bytes)
+  } else {
+    BigInt::from_bytes_le(Sign::Plus, &bytes)
+  }
+}
+
+/// `value` in `N` limbs, least significant first, in two's complement if `signed`, or `None` if it
+/// is out of range.
+fn big_to_limbs<const N: usize>(value: &BigInt, signed: bool) -> Option<[u64; N]> {
+  let negative = value.sign() == Sign::Minus;
+  // The shortest two's complement or unsigned encoding, which fits exactly when the value does.
+  let mut bytes = match (signed, negative) {
+    (true, _) => value.to_signed_bytes_le(),
+    (false, false) => value.to_bytes_le().1,
+    (false, true) => return None,
+  };
+  if bytes.len() > 8 * N {
+    return None;
+  }
+  bytes.resize(8 * N, if negative { 0xff } else { 0 });
+  let mut limbs = [0; N];
+  for (limb, chunk) in limbs.iter_mut().zip(bytes.as_chunks::<8>().0) {
+    *limb = u64::from_le_bytes(*chunk);
+  }
+  Some(limbs)
+}
+
+/// A storage type, compared with the reference through `num-bigint` integers.
+trait Repr: Copy + PartialEq + std::fmt::Debug + 'static {
+  /// The width in bits.
+  const BITS: u32;
+
+  fn to_big(self) -> BigInt;
+
+  /// The value equal to `value`, if the storage holds it.
+  fn from_big(value: &BigInt) -> Option<Self>;
+
+  /// Every bit pattern of the storage, uniformly.
+  fn any() -> BoxedStrategy<Self>;
+}
+
+macro_rules! native_repr {
+  ($($repr:ident),+) => {$(
+    impl Repr for $repr {
+      const BITS: u32 = $repr::BITS;
+
+      fn to_big(self) -> BigInt {
+        BigInt::from(self)
+      }
+
+      fn from_big(value: &BigInt) -> Option<Self> {
+        $repr::try_from(value).ok()
+      }
+
+      fn any() -> BoxedStrategy<Self> {
+        any::<$repr>().boxed()
+      }
+    }
+  )+};
+}
+
+native_repr!(i8, i16, i32, i64, i128, u8, u16, u32, u64, u128);
+
+macro_rules! wide_repr {
+  ($($repr:ident: $signed:literal, $limbs:literal),+) => {$(
+    impl Repr for $repr {
+      const BITS: u32 = 64 * $limbs;
+
+      fn to_big(self) -> BigInt {
+        limbs_to_big(&self.to_limbs(), $signed)
+      }
+
+      fn from_big(value: &BigInt) -> Option<Self> {
+        big_to_limbs(value, $signed).map($repr::from_limbs)
+      }
+
+      fn any() -> BoxedStrategy<Self> {
+        any::<[u64; $limbs]>().prop_map($repr::from_limbs).boxed()
+      }
+    }
+  )+};
+}
+
+wide_repr!(
+  i192: true, 3,
+  i256: true, 4,
+  i320: true, 5,
+  u192: false, 3,
+  u256: false, 4,
+  u320: false, 5
+);
 
 /// The shortest exact text of `coeff / 10^fraction`, padded to at least `precision` fraction
 /// digits.
@@ -369,47 +468,67 @@ macro_rules! suite {
       pub(super) const INTEGRAL: u32 = $integral;
       pub(super) const FRACTION: u32 = $fraction;
       pub(super) const DIGITS: u32 = $integral + $fraction;
-      pub(super) const SIGNED: bool = suite!(@signed $sign);
+  pub(super) const SIGNED: bool = suite!(@signed $sign);
 
       pub(super) fn big(value: T) -> BigInt {
-        BigInt::from(value.repr())
+        value.repr().to_big()
       }
 
       fn from_big(coeff: &BigInt) -> Option<T> {
-        $repr::try_from(coeff).ok().and_then(T::from_repr)
+        <$repr as Repr>::from_big(coeff).and_then(T::from_repr)
       }
 
       /// Coefficients at the edges of the range and at powers of ten and two inside it.
       fn edges() -> Vec<$repr> {
-        let max = T::MAX.repr() as i128;
-        let mut values = vec![0, 1, -1, max, -max, max - 1, -(max - 1)];
-        for exp in 0..=DIGITS {
-          let power = 10i128.pow(exp);
-          values.extend([power, power - 1, -power, -(power - 1)]);
-        }
-        for exp in 0..127 {
-          let power = 1i128 << exp;
-          values.extend([power, power - 1, -power, -(power - 1)]);
-        }
-        values
-          .into_iter()
-          .filter(|&value| value.unsigned_abs() <= max as u128 && (SIGNED || value >= 0))
-          .map(|value| value as $repr)
-          .collect()
+        // Computed once per suite: every test of the suite draws from them, and big-integer
+        // arithmetic is slow under Miri.
+        static EDGES: std::sync::OnceLock<Vec<$repr>> = std::sync::OnceLock::new();
+        EDGES
+          .get_or_init(|| {
+            let max = max_coeff(DIGITS);
+            let mut values = vec![BigInt::ZERO, BigInt::from(1u8), max.clone(), &max - 1u8];
+            let mut power = BigInt::from(1u8);
+            for _ in 0..=DIGITS {
+              values.extend([power.clone(), &power - 1u8]);
+              power *= 10u8;
+            }
+            for exp in 0..<$repr as Repr>::BITS {
+              let power = BigInt::from(1u8) << exp;
+              values.extend([power.clone(), power - 1u8]);
+            }
+            values
+              .into_iter()
+              .flat_map(|value| [-&value, value])
+              .filter(|value| value.magnitude() <= max.magnitude())
+              .filter(|value| SIGNED || value.sign() != Sign::Minus)
+              .map(|value| <$repr as Repr>::from_big(&value).expect("the storage holds the digits"))
+              .collect()
+          })
+          .clone()
       }
 
       pub(super) fn coeff() -> BoxedStrategy<$repr> {
-        let digits = suite!(@digits $sign, $repr);
+        let digits = (any::<bool>(), digit_text(DIGITS as usize)).prop_map(|(negative, text)| {
+          let magnitude: BigInt = text.parse().expect("ASCII digits");
+          let coeff = if negative && SIGNED {
+            -magnitude
+          } else {
+            magnitude
+          };
+          <$repr as Repr>::from_big(&coeff).expect("at most DIGITS digits fit")
+        });
         // Shifts keep random low bits, and a random sign for a signed storage, while bringing the
         // magnitude close to the decimal bound, which needs `bound_bits` bits.
+        let bits = <$repr as Repr>::BITS;
         let bound_bits = max_coeff(DIGITS).bits() as u32;
-        let value_bits = if SIGNED { $repr::BITS - 1 } else { $repr::BITS };
+        let value_bits = if SIGNED { bits - 1 } else { bits };
         let min_shift = value_bits.saturating_sub(bound_bits);
-        let bits = (any::<$repr>(), min_shift..$repr::BITS).prop_filter_map(
+        let bits = (<$repr as Repr>::any(), min_shift..bits).prop_filter_map(
           "outside the decimal range",
           |(bits, shift)| {
-            let value = bits >> shift;
-            T::from_repr(value).map(|_| value)
+            // An arithmetic shift, as `>>` is on a signed native integer.
+            let coeff = bits.to_big() >> shift;
+            <$repr as Repr>::from_big(&coeff).filter(|&coeff| T::from_repr(coeff).is_some())
           },
         );
         let edges = proptest::sample::select(edges());
@@ -426,8 +545,8 @@ macro_rules! suite {
         #![proptest_config(config())]
 
         #[test]
-        fn from_repr_checks_the_range(bits in any::<$repr>()) {
-          let expected = in_range(&BigInt::from(bits), DIGITS);
+        fn from_repr_checks_the_range(bits in <$repr as Repr>::any()) {
+          let expected = in_range(&bits.to_big(), DIGITS);
           prop_assert_eq!(T::from_repr(bits).is_some(), expected);
           if let Some(value) = T::from_repr(bits) {
             prop_assert_eq!(value.repr(), bits);
@@ -548,17 +667,6 @@ macro_rules! suite {
     false
   };
 
-  (@digits signed, $repr:ident) => {
-    (any::<bool>(), digit_text(DIGITS as usize)).prop_map(|(negative, text)| {
-      let magnitude: $repr = text.parse().expect("at most DIGITS digits fit");
-      if negative { -magnitude } else { magnitude }
-    })
-  };
-  (@digits unsigned, $repr:ident) => {
-    digit_text(DIGITS as usize)
-      .prop_map(|text| text.parse::<$repr>().expect("at most DIGITS digits fit"))
-  };
-
   (@signed_arithmetic signed, $a:ident, $big_a:ident) => {
     prop_assert_eq!(big($a.neg()), -&$big_a);
     prop_assert_eq!(big(-$a), -&$big_a);
@@ -592,6 +700,22 @@ suite!(u10x9: Decimal<U10, U9, u64>, u64, unsigned, integral = 10, fraction = 9)
 suite!(u19x0: Decimal<U19, U0, u64>, u64, unsigned, integral = 19, fraction = 0);
 suite!(u19x19: Decimal<U19, U19, u128>, u128, unsigned, integral = 19, fraction = 19);
 suite!(u38x0: Decimal<U38, U0, u128>, u128, unsigned, integral = 38, fraction = 0);
+
+suite!(w20x19: Decimal<U20, U19>, i192, signed, integral = 20, fraction = 19);
+suite!(w39x18: Decimal<U39, U18>, i192, signed, integral = 39, fraction = 18);
+suite!(w58x18: Decimal<U58, U18>, i256, signed, integral = 58, fraction = 18);
+suite!(w78x18: Decimal<U78, U18>, i320, signed, integral = 78, fraction = 18);
+suite!(w96x0: Decimal<U96, U0>, i320, signed, integral = 96, fraction = 0);
+suite!(w0x96: Decimal<U0, U96>, i320, signed, integral = 0, fraction = 96);
+suite!(d2x2_in_i320: Decimal<U2, U2, i320>, i320, signed, integral = 2, fraction = 2);
+
+suite!(uw20x19: Decimal<U20, U19, u192>, u192, unsigned, integral = 20, fraction = 19);
+suite!(uw39x18: Decimal<U39, U18, u192>, u192, unsigned, integral = 39, fraction = 18);
+suite!(uw59x18: Decimal<U59, U18, u256>, u256, unsigned, integral = 59, fraction = 18);
+suite!(uw78x18: Decimal<U78, U18, u320>, u320, unsigned, integral = 78, fraction = 18);
+suite!(uw96x0: Decimal<U96, U0, u320>, u320, unsigned, integral = 96, fraction = 0);
+// Any uint256 amount with 18 fraction digits.
+suite!(uint256: Decimal<U60, U18, u320>, u320, unsigned, integral = 60, fraction = 18);
 
 /// The reference and the crate both agree with coefficients computed by hand, so that they cannot
 /// share a mistake unnoticed.
@@ -692,7 +816,7 @@ macro_rules! exact_mul {
       fn $name(a in $lhs::value(), b in $rhs::value()) {
         let product: $product = a.exact_mul(b);
         let expected = $lhs::big(a) * $rhs::big(b);
-        prop_assert_eq!(BigInt::from(product.repr()), expected.clone());
+        prop_assert_eq!(product.repr().to_big(), expected.clone());
         prop_assert_eq!(
           product.to_string(),
           oracle_text(&expected, $lhs::FRACTION + $rhs::FRACTION, 0)
@@ -719,6 +843,23 @@ exact_mul!(mul_unsigned_fraction: u10x9 * u0x2 = Decimal<U10, U11, u128>);
 // A signed storage on either side gives the smallest signed storage.
 exact_mul!(mul_signed_by_unsigned: d1x1 * u1x1 = Decimal<U2, U2, i16>);
 exact_mul!(mul_unsigned_by_signed: u10x9 * d10x8 = Decimal<U20, U17, i128>);
+
+// Two 38-digit native coefficients give a 76-digit product in a wide storage.
+exact_mul!(mul_i128_squares_into_i256: d19x19 * d19x19 = Decimal<U38, U38>);
+exact_mul!(mul_u128_squares_into_u256: u38x0 * u38x0 = Decimal<U76, U0, u256>);
+exact_mul!(mul_u128_fractions_into_u256: u19x19 * u19x19 = Decimal<U38, U38, u256>);
+// A native by a wide operand, in either order.
+exact_mul!(mul_i64_by_i192: d10x8 * w39x18 = Decimal<U49, U26>);
+exact_mul!(mul_i256_by_i8: w58x18 * d1x1 = Decimal<U59, U19>);
+// Two wide operands, up to 96 digits.
+exact_mul!(mul_i192_by_i192: w39x18 * w20x19 = Decimal<U59, U37>);
+exact_mul!(mul_u192_by_u192: uw39x18 * uw20x19 = Decimal<U59, U37, u320>);
+// A wide operand whose product type has a native storage.
+exact_mul!(mul_explicit_wide_storage: d2x2_in_i320 * d1x1 = Decimal<U3, U3>);
+// An unsigned and a signed operand give a signed product; two unsigned ones an unsigned product.
+exact_mul!(mul_u256_by_i8: uw59x18 * d1x1 = Decimal<U60, U19>);
+exact_mul!(mul_i64_by_u256: d10x8 * uw59x18 = Decimal<U69, U26>);
+exact_mul!(mul_uint256_by_u8: uint256 * u1x1 = Decimal<U61, U19, u320>);
 
 macro_rules! convert {
   ($name:ident: $source:ident -> $target:ident) => {
@@ -762,6 +903,28 @@ convert!(convert_unsigned_to_fewer_digits: u19x19 -> u1x1);
 convert!(convert_unsigned_to_more_digits: u1x1 -> u19x19);
 convert!(convert_unsigned_integral_to_fraction: u38x0 -> u19x19);
 
+// From a wide storage to a native one, scaling up and down.
+convert!(convert_i192_to_i128_with_more_fraction_digits: w39x18 -> d19x19);
+convert!(convert_i256_to_i64: w58x18 -> d10x8);
+convert!(convert_u320_to_u64: uw78x18 -> u10x9);
+convert!(convert_i320_to_u64: w78x18 -> u19x0);
+convert!(convert_i320_fraction_to_i8: w0x96 -> d1x1);
+// Between wide storages.
+convert!(convert_i320_to_i192: w78x18 -> w39x18);
+convert!(convert_i320_integral_to_fraction: w96x0 -> w0x96);
+convert!(convert_i320_fraction_to_integral: w0x96 -> w96x0);
+convert!(convert_uint256_to_u256: uint256 -> uw59x18);
+convert!(convert_i320_to_u320: w78x18 -> uw78x18);
+convert!(convert_u320_to_i320: uw78x18 -> w78x18);
+convert!(convert_i256_to_u192: w58x18 -> uw39x18);
+convert!(convert_u256_to_i256: uw59x18 -> w58x18);
+// From a native storage to a wide one.
+convert!(convert_i128_to_i192_with_fewer_fraction_digits: d19x19 -> w39x18);
+convert!(convert_i8_to_i320_fraction: d1x1 -> w0x96);
+convert!(convert_u128_to_i320: u38x0 -> w96x0);
+convert!(convert_i64_to_u192: d10x8 -> uw39x18);
+convert!(convert_i8_to_explicit_i320: d1x1 -> d2x2_in_i320);
+
 macro_rules! widen {
   ($name:ident: $source:ident -> $target:ident) => {
     proptest! {
@@ -790,6 +953,55 @@ widen!(widen_u64_limit_to_i128: u19x0 -> d19x0);
 widen!(widen_unsigned_to_signed: u10x9 -> d19x19);
 widen!(widen_unsigned_storage: u10x9 -> u19x19);
 widen!(widen_unsigned_fraction_digits: u0x2 -> u19x19);
+
+// From a native storage to a wide one.
+widen!(widen_i64_to_i192: d10x8 -> w39x18);
+widen!(widen_i128_integral_to_i320: d38x0 -> w96x0);
+widen!(widen_i128_fraction_to_i320: d0x38 -> w0x96);
+widen!(widen_u128_to_uint256: u38x0 -> uint256);
+widen!(widen_u64_to_i256: u19x0 -> w58x18);
+widen!(widen_i8_to_explicit_i320: d1x1 -> d2x2_in_i320);
+// Between wide storages, also from unsigned to signed.
+widen!(widen_i192_to_i256: w39x18 -> w58x18);
+widen!(widen_i256_to_i320: w58x18 -> w78x18);
+widen!(widen_u192_to_u256: uw39x18 -> uw59x18);
+widen!(widen_u256_to_u320: uw59x18 -> uw78x18);
+widen!(widen_u256_to_uint256: uw59x18 -> uint256);
+widen!(widen_u192_to_i256: uw39x18 -> w58x18);
+widen!(widen_u256_to_i320: uw59x18 -> w78x18);
+
+/// uint256 amounts of every magnitude, as four limbs, least significant first.
+fn uint256_limbs() -> impl Strategy<Value = [u64; 4]> {
+  let edges = proptest::sample::select(vec![
+    [0; 4],
+    [1, 0, 0, 0],
+    [u64::MAX; 4],
+    [0, 0, 0, 1 << 63],
+    [u64::MAX, u64::MAX, u64::MAX, 0],
+  ]);
+  let shifted = (any::<[u64; 4]>(), 0u32..256).prop_map(|(limbs, shift)| {
+    big_to_limbs(&(limbs_to_big(&limbs, false) >> shift), false).expect("a shift keeps the range")
+  });
+  prop_oneof![any::<[u64; 4]>(), shifted, edges]
+}
+
+proptest! {
+  #![proptest_config(config())]
+
+  /// Every uint256 amount is a `Decimal<U60, U18, u320>` exactly, built from its limbs with a zero
+  /// limb on top or parsed from its digits with the exponent `-18`.
+  #[test]
+  fn every_uint256_amount_fits(limbs in uint256_limbs()) {
+    let raw = limbs_to_big(&limbs, false);
+    let [l0, l1, l2, l3] = limbs;
+    let amount = uint256::T::from_repr(u320::from_limbs([l0, l1, l2, l3, 0]));
+    prop_assert!(amount.is_some());
+    let amount = amount.expect("checked above");
+    prop_assert_eq!(uint256::big(amount), raw.clone());
+    prop_assert_eq!(amount.to_string(), oracle_text(&raw, 18, 0));
+    prop_assert_eq!(uint256::T::parse(&format!("{raw}e-18")), Ok(amount));
+  }
+}
 
 /// Renders a random `f64`, including NaN, the infinities and subnormals, with one of the four
 /// formatting traits the standard library implements for it.

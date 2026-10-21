@@ -3,11 +3,14 @@ use core::{ops::Neg, str::FromStr};
 use typenum::NonZero;
 
 use super::{Decimal, ParseError, parse};
-use crate::{int, layout::Layout};
+use crate::{i192, i256, i320, int, layout::Layout, u192, u256, u320};
 
-macro_rules! native_decimal {
-  ($($repr:ident: $sign:ident),+ $(,)?) => {$(
-    native_decimal!(@$sign $repr);
+/// Implements the constants, `const fn` methods and traits that depend only on the storage, for
+/// each listed storage with its sign, `signed` or `unsigned`, and its kind, `native` or `wide`.
+/// The kind selects how the examples import the storage and spell its coefficients.
+macro_rules! storage_decimal {
+  ($($repr:ident: $sign:ident $kind:ident),+ $(,)?) => {$(
+    storage_decimal!(@$sign $repr $kind);
 
     impl<I, F> Decimal<I, F, $repr>
     where
@@ -43,7 +46,7 @@ macro_rules! native_decimal {
     }
   )+};
 
-  (@signed $repr:ident) => {
+  (@signed $repr:ident $kind:ident) => {
     impl<I, F> Decimal<I, F, $repr>
     where
       (I, F): Layout<$repr>,
@@ -164,14 +167,14 @@ macro_rules! native_decimal {
       /// # Examples
       ///
       /// ```
-      /// use arbitrary_numbers::{Decimal, ParseErrorKind, typenum::U1};
+      #[doc = storage_decimal!(@use signed $kind $repr)]
       ///
       #[doc = concat!("type D = Decimal<U1, U1, ", stringify!($repr), ">;")]
       ///
       /// for text in ["2.5", "+2.5", "02.50", "25e-1", "0.25E+1", ".25e1", "2_5e-1", "250_000e-5"] {
-      ///   assert_eq!(D::parse(text)?.repr(), 25);
+      #[doc = concat!("  assert_eq!(D::parse(text)?", storage_decimal!(@coeff $kind "25"), ");")]
       /// }
-      /// assert_eq!(D::parse("-5.")?.repr(), -50);
+      #[doc = concat!("assert_eq!(D::parse(\"-5.\")?", storage_decimal!(@coeff $kind "-50"), ");")]
       /// assert_eq!(D::parse("-0e5")?, D::ZERO);
       ///
       /// let kind = |text| D::parse(text).map_err(|err| err.kind());
@@ -250,7 +253,7 @@ macro_rules! native_decimal {
     }
   };
 
-  (@unsigned $repr:ident) => {
+  (@unsigned $repr:ident $kind:ident) => {
     impl<I, F> Decimal<I, F, $repr>
     where
       (I, F): Layout<$repr>,
@@ -363,12 +366,12 @@ macro_rules! native_decimal {
       /// # Examples
       ///
       /// ```
-      /// use arbitrary_numbers::{Decimal, ParseErrorKind, typenum::U1};
+      #[doc = storage_decimal!(@use unsigned $kind $repr)]
       ///
       #[doc = concat!("type D = Decimal<U1, U1, ", stringify!($repr), ">;")]
       ///
       /// for text in ["2.5", "+2.5", "02.50", "25e-1", "0.25E+1", ".25e1", "2_5e-1", "250_000e-5"] {
-      ///   assert_eq!(D::parse(text)?.repr(), 25);
+      #[doc = concat!("  assert_eq!(D::parse(text)?", storage_decimal!(@coeff $kind "25"), ");")]
       /// }
       /// assert_eq!(D::parse("+0e5")?, D::ZERO);
       ///
@@ -416,17 +419,50 @@ macro_rules! native_decimal {
       }
     }
   };
+
+  // The imports of an example, in `rustfmt` order.
+  (@use $sign:ident native $repr:ident) => {
+    "use arbitrary_numbers::{Decimal, ParseErrorKind, typenum::U1};"
+  };
+  (@use signed wide $repr:ident) => {
+    concat!(
+      "use arbitrary_numbers::{Decimal, ParseErrorKind, ",
+      stringify!($repr),
+      ", typenum::U1};"
+    )
+  };
+  (@use unsigned wide $repr:ident) => {
+    concat!(
+      "use arbitrary_numbers::{Decimal, ParseErrorKind, typenum::U1, ",
+      stringify!($repr),
+      "};"
+    )
+  };
+
+  // A native coefficient compares with an integer literal, a wide one through its text.
+  (@coeff native $coeff:literal) => {
+    concat!(".repr(), ", $coeff)
+  };
+  (@coeff wide $coeff:literal) => {
+    concat!(".repr().to_string(), \"", $coeff, "\"")
+  };
 }
 
-native_decimal!(
-  i8: signed,
-  i16: signed,
-  i32: signed,
-  i64: signed,
-  i128: signed,
-  u8: unsigned,
-  u16: unsigned,
-  u32: unsigned,
-  u64: unsigned,
-  u128: unsigned,
+storage_decimal!(
+  i8: signed native,
+  i16: signed native,
+  i32: signed native,
+  i64: signed native,
+  i128: signed native,
+  i192: signed wide,
+  i256: signed wide,
+  i320: signed wide,
+  u8: unsigned native,
+  u16: unsigned native,
+  u32: unsigned native,
+  u64: unsigned native,
+  u128: unsigned native,
+  u192: unsigned wide,
+  u256: unsigned wide,
+  u320: unsigned wide,
 );

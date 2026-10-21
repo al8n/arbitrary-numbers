@@ -3,7 +3,7 @@
 </div>
 <div align="center">
 
-Exact fixed-point decimal numbers whose digit counts and storage are part of the type, for `no_std` without allocation.
+Exact fixed-point decimal numbers of up to 96 digits whose digit counts and storage are part of the type, for `no_std` without allocation.
 
 [<img alt="github" src="https://img.shields.io/badge/github-al8n/arbitrary--numbers-8da0cb?style=for-the-badge&logo=Github" height="22">][Github-url]
 [<img alt="Build" src="https://img.shields.io/github/actions/workflow/status/al8n/arbitrary-numbers/ci.yml?logo=Github-Actions&style=for-the-badge" height="22">][CI-url]
@@ -21,14 +21,14 @@ English | [简体中文][zh-cn-url]
 ## Overview
 
 `arbitrary-numbers` provides number types whose sizes are type-level numbers from
-[`typenum`](https://crates.io/crates/typenum) and whose storage is a native integer named in the
-type. Capacity is checked during type checking, so no value can be created for a type that cannot
-hold its digits.
+[`typenum`](https://crates.io/crates/typenum) and whose storage is an integer named in the type: a
+native integer, or a 192-, 256- or 320-bit integer of this crate. Capacity is checked during type
+checking, so no value can be created for a type that cannot hold its digits.
 
 | Family | Status |
 |---|---|
 | `Decimal<Integral, Fraction, Repr>`: exact fixed-point decimal numbers | Available |
-| `Uint<Bits, Repr>` and `Int<Bits, Repr>`: integers of any bit width | Planned |
+| `Uint<Bits, Repr>` and `Int<Bits, Repr>`: integers of any bit width | 192, 256 and 320 bits as decimal storage; arithmetic and other widths planned |
 | Floating-point types for standard formats such as `f16`, `bf16` and `f128` | Planned |
 | Atomic versions of the integer types | Planned |
 
@@ -69,23 +69,24 @@ fn main() -> Result<(), ParseError> {
 - The value is `c / 10^Fraction`, where the coefficient `c` is stored in `Repr` and
   `|c| <= 10^(Integral + Fraction) - 1`, like SQL `NUMERIC(Integral + Fraction, Fraction)`. There
   is no NaN, infinity or negative zero.
-- `Repr` is a signed or unsigned native integer. It defaults to the smallest signed integer that
-  holds the digits: `i8` up to 2 digits, `i16` up to 4, `i32` up to 9, `i64` up to 18 and `i128` up
-  to 38. A wider `Repr` can be named explicitly, and so can an unsigned one: `u8` up to 2 digits,
-  `u16` up to 4, `u32` up to 9, `u64` up to 19 and `u128` up to 38. The type has the size,
-  alignment and ABI of `Repr`.
+- `Repr` is a signed or unsigned integer. It defaults to the smallest signed integer that holds
+  the digits: `i8` up to 2 digits, `i16` up to 4, `i32` up to 9, `i64` up to 18, `i128` up to 38,
+  and the wide integers `i192` up to 57, `i256` up to 76 and `i320` up to 96. A wider `Repr` can be
+  named explicitly, and so can an unsigned one: `u8` up to 2 digits, `u16` up to 4, `u32` up to 9,
+  `u64` up to 19, `u128` up to 38, `u192` up to 57, `u256` up to 77 and `u320` up to 96. The type
+  has the size, alignment and ABI of `Repr`.
 - With a signed `Repr`, the range is symmetric and `Neg` is implemented. With an unsigned `Repr`,
   values run from zero to `MAX`, there is no negation, `checked_sub` returns `None` below zero,
   and parsing rejects a leading `-`, even in `-0`.
-- Zero digits, more than 38 digits, or a `Repr` that is too small are rejected during type
-  checking. With the default `Repr`, zero or more than 38 digits fail wherever the type is
+- Zero digits, more than 96 digits, or a `Repr` that is too small are rejected during type
+  checking. With the default `Repr`, zero or more than 96 digits fail wherever the type is
   written; with an explicit `Repr`, the type's constants and constructors fail, so no value of it
   can be created. The type itself has no bounds, so generic code can store and pass values
   without any.
 - Every operation is exact. `checked_add` and `checked_sub` return `None` outside the range,
-  `exact_mul` returns a wider type that always holds the product, `widen` converts to a type with
-  at least as many digits, and `try_convert` reports `OutOfRange` or `Inexact` instead of
-  rounding. There are no `+`, `-`, `*` or `/` operators.
+  `exact_mul` returns a wider type that always holds the product, up to 96 digits, `widen`
+  converts to a type with at least as many digits, and `try_convert` reports `OutOfRange` or
+  `Inexact` instead of rounding. There are no `+`, `-`, `*` or `/` operators.
 - Conversions follow the sign of the storage. The product of two unsigned storages is unsigned,
   and any other product is signed. `widen` converts an unsigned storage to any storage, but a
   signed storage only to a signed one. `try_convert` reports a negative value converted to an
@@ -99,6 +100,40 @@ fn main() -> Result<(), ParseError> {
   not fit is `OutOfRange` or `Inexact`, never rounded.
 - `Display` writes the shortest exact text, without an exponent. Format precision pads with zeros
   but never rounds.
+
+## Wide storage
+
+Decimals with more than 38 digits are stored in `i192`, `i256` and `i320`, or `u192`, `u256` and
+`u320`: aliases of `Int` and `Uint` with three, four and five 64-bit limbs. Any uint256 amount, such
+as a token balance, has at most 78 digits and fits a `u320`. A wide coefficient is built from its
+limbs, least significant first, and `from_repr` checks its range; decimal text with an exponent
+parses to the same value.
+
+```rust
+use arbitrary_numbers::{
+  Decimal, ParseError,
+  typenum::{U18, U60},
+  u320,
+};
+
+// Any uint256 amount of a token with 18 decimals.
+type TokenAmount = Decimal<U60, U18, u320>;
+
+fn main() -> Result<(), ParseError> {
+  // The raw amount 1.5 * 10^18 as the four limbs of a uint256.
+  let raw: [u64; 4] = [1_500_000_000_000_000_000, 0, 0, 0];
+  let [l0, l1, l2, l3] = raw;
+  let amount = TokenAmount::from_repr(u320::from_limbs([l0, l1, l2, l3, 0])).unwrap();
+  assert_eq!(amount.to_string(), "1.5");
+  assert_eq!("1500000000000000000e-18".parse::<TokenAmount>()?, amount);
+
+  Ok(())
+}
+```
+
+The wide integers provide only what a storage needs: `from_limbs`, `to_limbs`, `ZERO`, numeric
+equality, ordering and hashing, and decimal formatting. Their arithmetic, other widths and other
+limb types are planned.
 
 #### License
 

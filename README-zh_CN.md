@@ -3,7 +3,7 @@
 </div>
 <div align="center">
 
-位数与存储都写在类型里的精确定点十进制数，支持 `no_std`，不需要分配内存。
+位数与存储都写在类型里的精确定点十进制数，最多 96 位，支持 `no_std`，不需要分配内存。
 
 [<img alt="github" src="https://img.shields.io/badge/github-al8n/arbitrary--numbers-8da0cb?style=for-the-badge&logo=Github" height="22">][Github-url]
 [<img alt="Build" src="https://img.shields.io/github/actions/workflow/status/al8n/arbitrary-numbers/ci.yml?logo=Github-Actions&style=for-the-badge" height="22">][CI-url]
@@ -21,12 +21,12 @@
 ## 概览
 
 `arbitrary-numbers` 提供一组数字类型：大小是 [`typenum`](https://crates.io/crates/typenum)
-的类型层面数字，存储是在类型里指定的原生整数。容量在类型检查阶段核对，放不下位数的类型无法创建任何值。
+的类型层面数字，存储是在类型里指定的整数：原生整数，或者本 crate 的 192、256、320 位整数。容量在类型检查阶段核对，放不下位数的类型无法创建任何值。
 
 | 类型族 | 状态 |
 |---|---|
 | `Decimal<Integral, Fraction, Repr>`：精确的定点十进制数 | 已提供 |
-| `Uint<Bits, Repr>` 与 `Int<Bits, Repr>`：任意位宽的整数 | 计划中 |
+| `Uint<Bits, Repr>` 与 `Int<Bits, Repr>`：任意位宽的整数 | 已提供 192、256、320 位，作为十进制数的存储；运算与其他位宽计划中 |
 | 标准格式的浮点类型，例如 `f16`、`bf16` 与 `f128` | 计划中 |
 | 上述整数类型的原子版本 | 计划中 |
 
@@ -66,17 +66,18 @@ fn main() -> Result<(), ParseError> {
 
 - 值为 `c / 10^Fraction`，系数 `c` 存放在 `Repr` 中，并且 `|c| <= 10^(Integral + Fraction) - 1`，
   与 SQL 的 `NUMERIC(Integral + Fraction, Fraction)` 对应。没有 NaN、无穷，也没有负零。
-- `Repr` 是有符号或无符号的原生整数，默认取能放下这些位数的最小有符号整数：`i8` 最多 2 位，
-  `i16` 最多 4 位，`i32` 最多 9 位，`i64` 最多 18 位，`i128` 最多 38 位。也可以显式指定更宽的
-  `Repr`，或者无符号的 `Repr`：`u8` 最多 2 位，`u16` 最多 4 位，`u32` 最多 9 位，`u64` 最多 19 位，
-  `u128` 最多 38 位。类型的大小、对齐与 ABI 都与 `Repr` 相同。
+- `Repr` 是有符号或无符号的整数，默认取能放下这些位数的最小有符号整数：`i8` 最多 2 位，
+  `i16` 最多 4 位，`i32` 最多 9 位，`i64` 最多 18 位，`i128` 最多 38 位，宽整数 `i192` 最多 57 位，
+  `i256` 最多 76 位，`i320` 最多 96 位。也可以显式指定更宽的 `Repr`，或者无符号的 `Repr`：
+  `u8` 最多 2 位，`u16` 最多 4 位，`u32` 最多 9 位，`u64` 最多 19 位，`u128` 最多 38 位，
+  `u192` 最多 57 位，`u256` 最多 77 位，`u320` 最多 96 位。类型的大小、对齐与 ABI 都与 `Repr` 相同。
 - 有符号 `Repr` 的范围对称，并且实现 `Neg`。无符号 `Repr` 的值从零到 `MAX`，不能取负，
   `checked_sub` 的结果低于零时返回 `None`，解析时拒绝开头的 `-`，`-0` 也不例外。
-- 位数为 0、超过 38 位或 `Repr` 放不下时，类型检查阶段就会报错。使用默认 `Repr` 时，位数为 0
-  或超过 38 位的类型在任何写出它的地方都无法通过编译；显式指定 `Repr` 时，该类型的常量和构造函数
+- 位数为 0、超过 96 位或 `Repr` 放不下时，类型检查阶段就会报错。使用默认 `Repr` 时，位数为 0
+  或超过 96 位的类型在任何写出它的地方都无法通过编译；显式指定 `Repr` 时，该类型的常量和构造函数
   无法通过编译，因此无法创建它的值。类型本身不带约束，泛型代码存放和传递这些值时不需要任何约束。
 - 所有运算都精确：`checked_add` 与 `checked_sub` 超出范围时返回 `None`；`exact_mul`
-  返回一定放得下乘积的更宽类型；`widen` 转换到位数不少于原类型的类型；`try_convert`
+  返回一定放得下乘积的更宽类型，乘积最多 96 位；`widen` 转换到位数不少于原类型的类型；`try_convert`
   在超出范围或会丢失位数时返回 `OutOfRange` 或 `Inexact`，从不舍入。不提供 `+`、`-`、`*`、`/`
   运算符。
 - 转换遵循存储的符号：两个无符号存储的乘积用无符号存储，其他乘积用有符号存储；`widen`
@@ -88,6 +89,38 @@ fn main() -> Result<(), ParseError> {
   `+.5`、`5.`、`2.5E-3` 与 `1_000`。无穷与 NaN 能被识别，但报告为 `NotFinite`，因为 `Decimal`
   只表示有限值。放不下的值报告为 `OutOfRange` 或 `Inexact`，从不舍入。
 - `Display` 输出最短的精确文本，不使用指数。格式化精度只补零，从不舍入。
+
+## 宽存储
+
+超过 38 位的十进制数存放在 `i192`、`i256`、`i320` 或 `u192`、`u256`、`u320` 中，它们是 `Int` 与
+`Uint` 的别名，分别由 3、4、5 个 64 位 limb 组成。任意 uint256 数额（例如代币余额）最多 78 位，
+放得进 `u320`。宽系数由 limb 构造，最低位的 limb 在前，再由 `from_repr` 检查范围；带指数的十进制文本
+解析得到同一个值。
+
+```rust
+use arbitrary_numbers::{
+  Decimal, ParseError,
+  typenum::{U18, U60},
+  u320,
+};
+
+// Any uint256 amount of a token with 18 decimals.
+type TokenAmount = Decimal<U60, U18, u320>;
+
+fn main() -> Result<(), ParseError> {
+  // The raw amount 1.5 * 10^18 as the four limbs of a uint256.
+  let raw: [u64; 4] = [1_500_000_000_000_000_000, 0, 0, 0];
+  let [l0, l1, l2, l3] = raw;
+  let amount = TokenAmount::from_repr(u320::from_limbs([l0, l1, l2, l3, 0])).unwrap();
+  assert_eq!(amount.to_string(), "1.5");
+  assert_eq!("1500000000000000000e-18".parse::<TokenAmount>()?, amount);
+
+  Ok(())
+}
+```
+
+宽整数只提供作为存储所需的部分：`from_limbs`、`to_limbs`、`ZERO`，按数值的相等、比较与哈希，
+以及十进制格式化。它们的运算、其他位宽与其他 limb 类型计划中。
 
 #### License
 

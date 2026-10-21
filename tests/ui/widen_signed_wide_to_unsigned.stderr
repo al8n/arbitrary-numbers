@@ -1,0 +1,26 @@
+error[E0277]: `widen` cannot convert from a signed storage to an unsigned storage
+ --> tests/ui/widen_signed_wide_to_unsigned.rs:7:9
+  |
+7 |   value.widen()
+  |         ^^^^^ unsatisfied trait bound
+  |
+  = help: the trait `WidenRepr<Uint<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UTerm, B1>, B1>, B0>, B0>, B0>, B0>, B0>, B0>, [u64; 3]>>` is not implemented for `arbitrary_numbers::Int<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UTerm, B1>, B1>, B0>, B0>, B0>, B0>, B0>, B0>, [u64; 3]>`
+  = note: use `try_convert` for a conversion that can fail
+  = note: the compiler writes `u192`, `u256` and `u320` as `Uint` with the limbs `[u64; 3]`, `[u64; 4]` and `[u64; 5]`, and `i192`, `i256` and `i320` as `Int` with the same limbs
+  = help: `arbitrary_numbers::Int<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UTerm, B1>, B1>, B0>, B0>, B0>, B0>, B0>, B0>, [u64; 3]>` implements trait `WidenRepr<Target>`:
+            WidenRepr<arbitrary_numbers::Int<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UTerm, B1>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, [u64; 4]>>
+            WidenRepr<arbitrary_numbers::Int<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UTerm, B1>, B0>, B1>, B0>, B0>, B0>, B0>, B0>, B0>, [u64; 5]>>
+            WidenRepr<arbitrary_numbers::Int<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UTerm, B1>, B1>, B0>, B0>, B0>, B0>, B0>, B0>, [u64; 3]>>
+            WidenRepr<i128>
+            WidenRepr<i16>
+            WidenRepr<i32>
+            WidenRepr<i64>
+            WidenRepr<i8>
+note: required by a bound in `Decimal::<I, F, R>::widen`
+ --> src/decimal.rs
+  |
+  |   pub fn widen<I2, F2, R2>(self) -> Decimal<I2, F2, R2>
+  |          ----- required by a bound in this associated function
+  |   where
+  |     R: WidenRepr<R2>,
+  |        ^^^^^^^^^^^^^ required by this bound in `Decimal::<I, F, R>::widen`

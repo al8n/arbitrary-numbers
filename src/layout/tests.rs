@@ -1,55 +1,77 @@
 // Each row of the digit table gets a test named after its `typenum` constant.
 #![allow(non_snake_case)]
 
-use core::any::TypeId;
+use core::{any::TypeId, fmt::Debug};
+use std::{vec, vec::Vec};
 
-use typenum::{B0, B1, U0, U1, U2, U3, U8, U9, U10, U18, U19, U20, U38, Unsigned};
+use num_bigint::{BigInt, BigUint};
+use typenum::{
+  B0, B1, U0, U1, U2, U3, U8, U9, U10, U18, U19, U20, U38, U39, U57, U58, U76, U77, U78, U96,
+  Unsigned,
+};
 
 use super::{DigitCount, FitsDigits, Layout, Pick, SealedLayout, SealedStorage, WidenRepr};
+use crate::{bigint, i192, i256, i320, u192, u256, u320};
 
-/// Every signed storage with its largest value, smallest storage first.
-const SIGNED: [(&str, u128); 5] = [
-  ("i8", i8::MAX as u128),
-  ("i16", i16::MAX as u128),
-  ("i32", i32::MAX as u128),
-  ("i64", i64::MAX as u128),
-  ("i128", i128::MAX as u128),
+/// Every signed storage with its number of value bits, smallest storage first.
+const SIGNED: [(&str, u32); 8] = [
+  ("i8", 7),
+  ("i16", 15),
+  ("i32", 31),
+  ("i64", 63),
+  ("i128", 127),
+  ("i192", 191),
+  ("i256", 255),
+  ("i320", 319),
 ];
 
-/// Every unsigned storage with its largest value, smallest storage first.
-const UNSIGNED: [(&str, u128); 5] = [
-  ("u8", u8::MAX as u128),
-  ("u16", u16::MAX as u128),
-  ("u32", u32::MAX as u128),
-  ("u64", u64::MAX as u128),
-  ("u128", u128::MAX),
+/// Every unsigned storage with its number of value bits, smallest storage first.
+const UNSIGNED: [(&str, u32); 8] = [
+  ("u8", 8),
+  ("u16", 16),
+  ("u32", 32),
+  ("u64", 64),
+  ("u128", 128),
+  ("u192", 192),
+  ("u256", 256),
+  ("u320", 320),
 ];
 
 fn assert_fits<Digits: FitsDigits<Repr>, Repr>() {}
 
-/// Checks the storages that a row lists for one sign class: the first holds `max_coeff` while the
-/// next smaller storage of the class does not, and the list is every storage of the class that
-/// holds it.
-fn assert_class(storages: &[(&str, u128)], max_coeff: u128, listed: &[&str]) {
+/// Checks the storages that a row lists for one sign class: the first holds `10^digits - 1` while
+/// the next smaller storage of the class does not, and the list is every storage of the class that
+/// holds it. Each listed storage also holds `10^digits`, which the integer core relies on when it
+/// scales by a power of ten.
+fn assert_class(storages: &[(&str, u32)], digits: u32, listed: &[&str]) {
+  let power = BigUint::from(10u8).pow(digits);
+  let max_coeff = &power - 1u8;
+  let max = |bits: u32| (BigUint::from(1u8) << bits) - 1u8;
   let minimal = storages
     .iter()
     .position(|&(name, _)| name == listed[0])
     .expect("the table names a known storage");
   assert!(
-    max_coeff <= storages[minimal].1,
+    max_coeff <= max(storages[minimal].1),
     "the minimal storage holds the digits"
   );
   if let Some(smaller) = minimal.checked_sub(1) {
     assert!(
-      max_coeff > storages[smaller].1,
+      max_coeff > max(storages[smaller].1),
       "the next smaller storage does not"
     );
   }
   let holding = storages
     .iter()
-    .filter(|&&(_, max)| max_coeff <= max)
+    .filter(|&&(_, bits)| max_coeff <= max(bits))
     .map(|&(name, _)| name);
   assert!(listed.iter().copied().eq(holding));
+  for &(_, bits) in storages.iter().filter(|&&(name, _)| listed.contains(&name)) {
+    assert!(
+      power <= max(bits),
+      "a storage that holds the digits holds the power"
+    );
+  }
 }
 
 macro_rules! test_digits {
@@ -63,15 +85,14 @@ macro_rules! test_digits {
       type Digits = typenum::consts::$digits;
       assert_eq!(<Digits as Unsigned>::U32, $value);
 
-      let max_coeff = 10u128.pow($value) - 1;
       assert_class(
         &SIGNED,
-        max_coeff,
+        $value,
         &[stringify!($signed) $(, stringify!($wider_signed))*],
       );
       assert_class(
         &UNSIGNED,
-        max_coeff,
+        $value,
         &[stringify!($unsigned) $(, stringify!($wider_unsigned))*],
       );
       assert_eq!(
@@ -122,6 +143,17 @@ fn layout_digit_counts() {
   assert_eq!(digits::<U19, U0, u64>(), (19, 0, 19));
   assert_eq!(digits::<U10, U9, u128>(), (10, 9, 19));
   assert_eq!(digits::<U38, U0, u128>(), (38, 0, 38));
+
+  assert_eq!(digits::<U39, U18, i192>(), (39, 18, 57));
+  assert_eq!(digits::<U0, U57, u192>(), (0, 57, 57));
+  assert_eq!(digits::<U58, U18, i256>(), (58, 18, 76));
+  assert_eq!(digits::<U77, U0, u256>(), (77, 0, 77));
+  assert_eq!(digits::<U78, U18, i320>(), (78, 18, 96));
+  assert_eq!(digits::<U96, U0, u320>(), (96, 0, 96));
+  assert_eq!(digits::<U0, U96, i320>(), (0, 96, 96));
+  // Few digits in a wide storage.
+  assert_eq!(digits::<U1, U1, u320>(), (1, 1, 2));
+  assert_eq!(digits::<U0, U1, i192>(), (0, 1, 1));
 }
 
 #[test]
@@ -132,14 +164,24 @@ fn storage_signs() {
 
   assert!(signed::<i8>() && signed::<i16>() && signed::<i32>());
   assert!(signed::<i64>() && signed::<i128>());
+  assert!(signed::<i192>() && signed::<i256>() && signed::<i320>());
   assert!(!signed::<u8>() && !signed::<u16>() && !signed::<u32>());
   assert!(!signed::<u64>() && !signed::<u128>());
+  assert!(!signed::<u192>() && !signed::<u256>() && !signed::<u320>());
   assert_eq!(
     TypeId::of::<<i64 as SealedStorage>::IsUnsigned>(),
     TypeId::of::<B0>()
   );
   assert_eq!(
     TypeId::of::<<u64 as SealedStorage>::IsUnsigned>(),
+    TypeId::of::<B1>()
+  );
+  assert_eq!(
+    TypeId::of::<<i256 as SealedStorage>::IsUnsigned>(),
+    TypeId::of::<B0>()
+  );
+  assert_eq!(
+    TypeId::of::<<u256 as SealedStorage>::IsUnsigned>(),
     TypeId::of::<B1>()
   );
 }
@@ -160,6 +202,19 @@ fn pick_by_sign() {
   assert_eq!(picked::<B1, U19>(), TypeId::of::<u64>());
   assert_eq!(picked::<B0, U38>(), TypeId::of::<i128>());
   assert_eq!(picked::<B1, U38>(), TypeId::of::<u128>());
+  assert_eq!(picked::<B0, U39>(), TypeId::of::<i192>());
+  assert_eq!(picked::<B1, U39>(), TypeId::of::<u192>());
+  assert_eq!(picked::<B0, U57>(), TypeId::of::<i192>());
+  assert_eq!(picked::<B1, U57>(), TypeId::of::<u192>());
+  assert_eq!(picked::<B0, U58>(), TypeId::of::<i256>());
+  assert_eq!(picked::<B1, U58>(), TypeId::of::<u256>());
+  assert_eq!(picked::<B0, U76>(), TypeId::of::<i256>());
+  // 77 digits need an `i320` but fit a `u256`.
+  assert_eq!(picked::<B0, U77>(), TypeId::of::<i320>());
+  assert_eq!(picked::<B1, U77>(), TypeId::of::<u256>());
+  assert_eq!(picked::<B1, U78>(), TypeId::of::<u320>());
+  assert_eq!(picked::<B0, U96>(), TypeId::of::<i320>());
+  assert_eq!(picked::<B1, U96>(), TypeId::of::<u320>());
 }
 
 #[test]
@@ -167,23 +222,120 @@ fn widen_repr_pairs() {
   fn assert_widens<Source: WidenRepr<Target>, Target>() {}
 
   macro_rules! assert_pairs {
-    ($($source:ident => [$($target:ident),+]),+ $(,)?) => {
-      $($(assert_widens::<$source, $target>();)+)+
+    ($($source:ident),+ => $targets:tt) => {
+      $(assert_pairs!(@source $source => $targets);)+
+    };
+    (@source $source:ident => [$($target:ident),+]) => {
+      $(assert_widens::<$source, $target>();)+
     };
   }
 
   // Every unsigned storage converts to every storage, and every signed one to every signed one;
   // the remaining pairs fail to compile.
   assert_pairs!(
-    u8 => [u8, u16, u32, u64, u128, i8, i16, i32, i64, i128],
-    u16 => [u8, u16, u32, u64, u128, i8, i16, i32, i64, i128],
-    u32 => [u8, u16, u32, u64, u128, i8, i16, i32, i64, i128],
-    u64 => [u8, u16, u32, u64, u128, i8, i16, i32, i64, i128],
-    u128 => [u8, u16, u32, u64, u128, i8, i16, i32, i64, i128],
-    i8 => [i8, i16, i32, i64, i128],
-    i16 => [i8, i16, i32, i64, i128],
-    i32 => [i8, i16, i32, i64, i128],
-    i64 => [i8, i16, i32, i64, i128],
-    i128 => [i8, i16, i32, i64, i128],
+    u8, u16, u32, u64, u128, u192, u256, u320 => [
+      u8, u16, u32, u64, u128, u192, u256, u320, i8, i16, i32, i64, i128, i192, i256, i320
+    ]
+  );
+  assert_pairs!(
+    i8, i16, i32, i64, i128, i192, i256, i320 => [i8, i16, i32, i64, i128, i192, i256, i320]
+  );
+}
+
+/// A storage whose values the conversion tests compare as `num-bigint` integers.
+trait Value: SealedStorage + Debug + PartialEq {
+  fn to_big(self) -> BigInt;
+
+  /// The value of this storage equal to `value`, if the storage holds it.
+  fn from_big(value: &BigInt) -> Option<Self>;
+}
+
+macro_rules! native_value {
+  ($($repr:ident),+) => {$(
+    impl Value for $repr {
+      fn to_big(self) -> BigInt {
+        BigInt::from(self)
+      }
+
+      fn from_big(value: &BigInt) -> Option<Self> {
+        <$repr>::try_from(value).ok()
+      }
+    }
+  )+};
+}
+
+native_value!(i8, i16, i32, i64, i128, u8, u16, u32, u64, u128);
+
+macro_rules! wide_value {
+  ($($repr:ident: $limbs:literal),+) => {$(
+    impl Value for $repr {
+      fn to_big(self) -> BigInt {
+        bigint::from_limbs(&self.to_limbs(), Self::SIGNED)
+      }
+
+      fn from_big(value: &BigInt) -> Option<Self> {
+        bigint::to_limbs::<$limbs>(value, Self::SIGNED).map(Self::from_limbs)
+      }
+    }
+  )+};
+}
+
+wide_value!(i192: 3, i256: 4, i320: 5, u192: 3, u256: 4, u320: 5);
+
+/// Integers at and around the limits of every storage.
+fn boundaries() -> Vec<BigInt> {
+  let mut values = vec![BigInt::ZERO, BigInt::from(1u8), BigInt::from(-1)];
+  for bits in [8, 16, 32, 64, 128, 192, 256, 320] {
+    for limit in [
+      bigint::min(bits, true),
+      bigint::max(bits, true),
+      bigint::max(bits, false),
+    ] {
+      values.extend([&limit - 1u8, limit.clone(), &limit + 1u8]);
+    }
+  }
+  bigint::thin(values)
+}
+
+/// The boundaries that `Source` holds, with their values.
+fn samples<Source: Value>() -> Vec<(Source, BigInt)> {
+  let mut samples = Vec::new();
+  for value in boundaries() {
+    if let Some(source) = Source::from_big(&value) {
+      assert_eq!(source.to_big(), value);
+      samples.push((source, value));
+    }
+  }
+  samples
+}
+
+/// Converts each sample to `Target`: the checked conversion succeeds exactly when `Target` holds
+/// the value, and then both conversions keep it.
+fn assert_conversions<Source: Value, Target: Value>(samples: &[(Source, BigInt)]) {
+  for (source, value) in samples {
+    let expected = Target::from_big(value);
+    assert_eq!(source.checked_convert::<Target>(), expected, "{value}");
+    if let Some(target) = expected {
+      assert_eq!(source.convert::<Target>(), target, "{value}");
+    }
+  }
+}
+
+#[test]
+fn conversions_between_every_pair() {
+  macro_rules! assert_pairs {
+    ($($source:ident),+ => $targets:tt) => {
+      $(assert_pairs!(@source $source => $targets);)+
+    };
+    (@source $source:ident => [$($target:ident),+]) => {
+      let source_samples = samples::<$source>();
+      $(assert_conversions::<$source, $target>(&source_samples);)+
+    };
+  }
+
+  assert_pairs!(
+    i8, i16, i32, i64, i128, i192, i256, i320, u8, u16, u32, u64, u128, u192, u256, u320 => [
+      i8, i16, i32, i64, i128, i192, i256, i320, u8, u16, u32, u64, u128, u192, u256, u320
+    ]
   );
 }
