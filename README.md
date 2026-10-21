@@ -3,7 +3,7 @@
 </div>
 <div align="center">
 
-Exact fixed-point decimal numbers of up to 96 digits whose digit counts and storage are part of the type, for `no_std` without allocation.
+Exact fixed-point decimal numbers of up to 153 digits, or 154 with an explicit `u512`, whose digit counts and storage are part of the type, for `no_std` without allocation.
 
 [<img alt="github" src="https://img.shields.io/badge/github-al8n/arbitrary--numbers-8da0cb?style=for-the-badge&logo=Github" height="22">][Github-url]
 [<img alt="Build" src="https://img.shields.io/github/actions/workflow/status/al8n/arbitrary-numbers/ci.yml?logo=Github-Actions&style=for-the-badge" height="22">][CI-url]
@@ -22,13 +22,13 @@ English | [简体中文][zh-cn-url]
 
 `arbitrary-numbers` provides number types whose sizes are type-level numbers from
 [`typenum`](https://crates.io/crates/typenum) and whose storage is an integer named in the type: a
-native integer, or a 192-, 256- or 320-bit integer of this crate. Capacity is checked during type
-checking, so no value can be created for a type that cannot hold its digits.
+native integer, or a 192-, 256-, 320-, 384-, 448- or 512-bit integer of this crate. Capacity is
+checked during type checking, so no value can be created for a type that cannot hold its digits.
 
 | Family | Status |
 |---|---|
 | `Decimal<Integral, Fraction, Repr>`: exact fixed-point decimal numbers | Available |
-| `Uint<Bits, Repr>` and `Int<Bits, Repr>`: integers of any bit width | 192, 256 and 320 bits as decimal storage; arithmetic and other widths planned |
+| `Uint<Bits, Repr>` and `Int<Bits, Repr>`: integers of any bit width | 192, 256, 320, 384, 448 and 512 bits as decimal storage; arithmetic and other widths planned |
 | Floating-point types for standard formats such as `f16`, `bf16` and `f128` | Planned |
 | Atomic versions of the integer types | Planned |
 
@@ -71,20 +71,21 @@ fn main() -> Result<(), ParseError> {
   is no NaN, infinity or negative zero.
 - `Repr` is a signed or unsigned integer. It defaults to the smallest signed integer that holds
   the digits: `i8` up to 2 digits, `i16` up to 4, `i32` up to 9, `i64` up to 18, `i128` up to 38,
-  and the wide integers `i192` up to 57, `i256` up to 76 and `i320` up to 96. A wider `Repr` can be
-  named explicitly, and so can an unsigned one: `u8` up to 2 digits, `u16` up to 4, `u32` up to 9,
-  `u64` up to 19, `u128` up to 38, `u192` up to 57, `u256` up to 77 and `u320` up to 96. The type
-  has the size, alignment and ABI of `Repr`.
+  and the wide integers `i192` up to 57, `i256` up to 76, `i320` up to 96, `i384` up to 115, `i448`
+  up to 134 and `i512` up to 153. A wider `Repr` can be named explicitly, and so can an unsigned
+  one: `u8` up to 2 digits, `u16` up to 4, `u32` up to 9, `u64` up to 19, `u128` up to 38, `u192`
+  up to 57, `u256` up to 77, `u320` up to 96, `u384` up to 115, `u448` up to 134 and `u512` up to
+  154. The type has the size, alignment and ABI of `Repr`.
 - With a signed `Repr`, the range is symmetric and `Neg` is implemented. With an unsigned `Repr`,
   values run from zero to `MAX`, there is no negation, `checked_sub` returns `None` below zero,
   and parsing rejects a leading `-`, even in `-0`.
-- Zero digits, more than 96 digits, or a `Repr` that is too small are rejected during type
-  checking. With the default `Repr`, zero or more than 96 digits fail wherever the type is
+- Zero digits, more than 154 digits, or a `Repr` that is too small are rejected during type
+  checking. With the default `Repr`, zero or more than 153 digits fail wherever the type is
   written; with an explicit `Repr`, the type's constants and constructors fail, so no value of it
   can be created. The type itself has no bounds, so generic code can store and pass values
   without any.
 - Every operation is exact. `checked_add` and `checked_sub` return `None` outside the range,
-  `exact_mul` returns a wider type that always holds the product, up to 96 digits, `widen`
+  `exact_mul` returns a wider type that always holds the product, up to 153 digits, `widen`
   converts to a type with at least as many digits, and `try_convert` reports `OutOfRange` or
   `Inexact` instead of rounding. There are no `+`, `-`, `*` or `/` operators.
 - Conversions follow the sign of the storage. The product of two unsigned storages is unsigned,
@@ -103,11 +104,13 @@ fn main() -> Result<(), ParseError> {
 
 ## Wide storage
 
-Decimals with more than 38 digits are stored in `i192`, `i256` and `i320`, or `u192`, `u256` and
-`u320`: aliases of `Int` and `Uint` with three, four and five 64-bit limbs. Any uint256 amount, such
-as a token balance, has at most 78 digits and fits a `u320`. A wide coefficient is built from its
-limbs, least significant first, and `from_repr` checks its range; decimal text with an exponent
-parses to the same value.
+Decimals with more than 38 digits are stored in `i192`, `i256`, `i320`, `i384`, `i448` and `i512`,
+or `u192`, `u256`, `u320`, `u384`, `u448` and `u512`: aliases of `Int` and `Uint` with three to
+eight 64-bit limbs. Any uint256 amount, such as a token balance, has at most 78 digits and fits a
+`u320`. The 154th digit fits only a `u512`, which must be named explicitly, as in
+`Decimal<U154, U0, u512>`: no signed storage holds 154 digits, so the default storage and the
+product of `exact_mul` stop at 153. A wide coefficient is built from its limbs, least significant
+first, and `from_repr` checks its range; decimal text with an exponent parses to the same value.
 
 ```rust
 use arbitrary_numbers::{

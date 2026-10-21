@@ -9,7 +9,7 @@
 //!
 //! Each storage has a module of the same name. For the native storages, the modules for `u8`
 //! through `u128` form the lower layer and the modules for `i8` through `i128` the upper layer. The
-//! wide storages `u192` through `u320` and `i192` through `i320` hold arrays of 64-bit limbs, least
+//! wide storages `u192` through `u512` and `i192` through `i512` hold arrays of 64-bit limbs, least
 //! significant first. Their modules apply `limbs`, the lower layer for `[u64; N]`, and
 //! `signed_limbs`, the upper layer, which reads the array as two's complement.
 //!
@@ -23,9 +23,9 @@
 //! crate: native arithmetic then overflows as native arithmetic does, multi-limb arithmetic wraps
 //! and fails a debug assertion, and narrowing truncates.
 
-/// Length of a buffer that holds the decimal digits of any magnitude: `u320::MAX` and `|i320::MIN|`
-/// have 97.
-pub(crate) const DIGIT_BUF_LEN: usize = 97;
+/// Length of a buffer that holds the decimal digits of any magnitude: `u512::MAX` has 155 and
+/// `|i512::MIN|` has 154.
+pub(crate) const DIGIT_BUF_LEN: usize = 155;
 
 /// Decimal digits of a magnitude, written right-aligned by `write_digits`.
 // The modules below shadow the primitive type names in this module.
@@ -434,10 +434,16 @@ macro_rules! wide {
 wide!(unsigned u192: 3);
 wide!(unsigned u256: 4);
 wide!(unsigned u320: 5);
+wide!(unsigned u384: 6);
+wide!(unsigned u448: 7);
+wide!(unsigned u512: 8);
 
 wide!(signed i192: 3);
 wide!(signed i256: 4);
 wide!(signed i320: 5);
+wide!(signed i384: 6);
+wide!(signed i448: 7);
+wide!(signed i512: 8);
 
 #[cfg(test)]
 mod tests;

@@ -207,7 +207,7 @@ pub(crate) const fn div_rem_pow10<const N: usize>(
 
 /// Writes the decimal digits of `|value|` to the end of `buf`, without leading zeros (zero is a
 /// single `0`), and returns the index of the first digit. Requires `|value|` to have at most
-/// `DIGIT_BUF_LEN` digits, which holds for `N <= 5`.
+/// `DIGIT_BUF_LEN` digits, which holds for `N <= 8`.
 #[inline]
 pub(crate) const fn write_digits<const N: usize>(value: [u64; N], buf: &mut DigitBuf) -> usize {
   limbs::write_digits(unsigned_abs(value), buf)

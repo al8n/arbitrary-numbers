@@ -179,6 +179,9 @@ fn carries_and_borrows_cross_every_limb() {
   carries_and_borrows::<3>();
   carries_and_borrows::<4>();
   carries_and_borrows::<5>();
+  carries_and_borrows::<6>();
+  carries_and_borrows::<7>();
+  carries_and_borrows::<8>();
 }
 
 fn numeric_order<const N: usize>() {
@@ -200,6 +203,9 @@ fn comparison_is_numeric() {
   numeric_order::<3>();
   numeric_order::<4>();
   numeric_order::<5>();
+  numeric_order::<6>();
+  numeric_order::<7>();
+  numeric_order::<8>();
 }
 
 fn maximal_products<const N: usize>() {
@@ -242,6 +248,9 @@ fn multiplication_with_maximal_operands() {
   maximal_products::<3>();
   maximal_products::<4>();
   maximal_products::<5>();
+  maximal_products::<6>();
+  maximal_products::<7>();
+  maximal_products::<8>();
 }
 
 fn division_by_every_power<const N: usize>() {
@@ -268,6 +277,9 @@ fn div_rem_pow10_for_every_exponent() {
   division_by_every_power::<3>();
   division_by_every_power::<4>();
   division_by_every_power::<5>();
+  division_by_every_power::<6>();
+  division_by_every_power::<7>();
+  division_by_every_power::<8>();
 }
 
 fn digits_of_the_limits<const N: usize>() {
@@ -293,11 +305,14 @@ fn digits_of_zero_and_max() {
   digits_of_the_limits::<3>();
   digits_of_the_limits::<4>();
   digits_of_the_limits::<5>();
+  digits_of_the_limits::<6>();
+  digits_of_the_limits::<7>();
+  digits_of_the_limits::<8>();
   let mut buf = [0; DIGIT_BUF_LEN];
   assert_eq!(
-    write_digits([u64::MAX; 5], &mut buf),
+    write_digits([u64::MAX; 8], &mut buf),
     0,
-    "u320::MAX fills the buffer"
+    "u512::MAX fills the buffer"
   );
 }
 

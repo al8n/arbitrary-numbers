@@ -13,11 +13,14 @@ use std::{
 use num_bigint::BigInt;
 use typenum::{
   U0, U1, U2, U3, U4, U5, U6, U8, U9, U10, U11, U12, U15, U16, U17, U18, U19, U20, U21, U22, U26,
-  U34, U37, U38, U39, U49, U58, U59, U60, U76, U77, U78, U96,
+  U28, U34, U37, U38, U39, U49, U58, U59, U60, U70, U76, U77, U78, U96, U97, U116, U120, U135,
+  U153, U154,
 };
 
 use super::{ConvertError, Decimal, ParseError, ParseErrorKind};
-use crate::{Layout, Storage, bigint, i192, i256, i320, u192, u256, u320};
+use crate::{
+  Layout, Storage, bigint, i192, i256, i320, i384, i448, i512, u192, u256, u320, u384, u448, u512,
+};
 
 /// `i8` at its 2-digit limit.
 type D1x1 = Decimal<U1, U1>;
@@ -1809,6 +1812,18 @@ type D0x96 = Decimal<U0, U96>;
 type D96x0u320 = Decimal<U96, U0, u320>;
 /// Any uint256 amount with 18 fraction digits.
 type TokenAmount = Decimal<U60, U18, u320>;
+/// `i384` at its 115-digit limit.
+type D97x18 = Decimal<U97, U18>;
+/// `u384` at its 115-digit limit.
+type D97x18u384 = Decimal<U97, U18, u384>;
+/// `i448` at its 134-digit limit.
+type D116x18 = Decimal<U116, U18>;
+/// `i512` at its 153-digit limit.
+type D153x0 = Decimal<U153, U0>;
+type D0x153 = Decimal<U0, U153>;
+type D135x18 = Decimal<U135, U18>;
+/// `u512` at its 154-digit limit, one digit more than `i512` holds.
+type D154x0u512 = Decimal<U154, U0, u512>;
 
 #[test]
 fn wide_storage_layout() {
@@ -1822,10 +1837,20 @@ fn wide_storage_layout() {
   let _: i320 = D96x0::ZERO.repr();
   let _: u320 = D96x0u320::ZERO.repr();
   let _: u320 = TokenAmount::ZERO.repr();
+  let _: i384 = D97x18::ZERO.repr();
+  let _: u384 = D97x18u384::ZERO.repr();
+  let _: i448 = D116x18::ZERO.repr();
+  let _: i512 = D135x18::ZERO.repr();
+  let _: i512 = D153x0::ZERO.repr();
+  let _: u512 = D154x0u512::ZERO.repr();
 
   assert_eq!(size_of::<D39x18>(), 24);
   assert_eq!(size_of::<D58x18>(), 32);
   assert_eq!(size_of::<D96x0>(), 40);
+  assert_eq!(size_of::<D97x18>(), 48);
+  assert_eq!(size_of::<D116x18>(), 56);
+  assert_eq!(size_of::<D135x18>(), 64);
+  assert_eq!(size_of::<D154x0u512>(), size_of::<u512>());
   assert_eq!(size_of::<TokenAmount>(), size_of::<u320>());
   assert_eq!(align_of::<TokenAmount>(), align_of::<u64>());
   // A few digits in an explicitly chosen wide storage.
@@ -1847,6 +1872,11 @@ fn wide_trait_surface() {
   assert_traits::<D96x0u320>();
   assert_traits::<TokenAmount>();
   assert_traits::<Decimal<U2, U2, i320>>();
+  assert_traits::<D97x18>();
+  assert_traits::<D97x18u384>();
+  assert_traits::<D116x18>();
+  assert_traits::<D0x153>();
+  assert_traits::<D154x0u512>();
 }
 
 #[test]
@@ -1877,6 +1907,16 @@ fn wide_constants() {
   assert!(D96x0::MIN.is_negative() && D96x0::MAX.is_positive() && D96x0::ZERO.is_zero());
   assert!(!D96x0u320::ZERO.is_positive() && D96x0u320::MAX.is_positive());
   assert_eq!(D96x0::MIN.abs(), D96x0::MAX);
+
+  assert_eq!(D97x18::MIN, -D97x18::MAX);
+  assert_eq!(
+    D135x18::MAX.to_string(),
+    format!("{}.{}", nines(135), nines(18))
+  );
+  assert_eq!(D153x0::MAX.to_string(), nines(153));
+  assert_eq!(D0x153::MAX.to_string(), format!("0.{}", nines(153)));
+  assert_eq!(D154x0u512::MAX.to_string(), nines(154));
+  assert_eq!(D154x0u512::MIN, D154x0u512::ZERO);
 }
 
 #[test]
@@ -1914,6 +1954,29 @@ fn wide_from_repr_checks_the_decimal_range() {
   assert_eq!(D77x0u256::from_repr(u256_of(bigint::pow10(77))), None);
   assert_eq!(D77x0u256::from_repr(u256::from_limbs([u64::MAX; 4])), None);
   assert_eq!(D77x0u256::from_repr(u256::ZERO), Some(D77x0u256::ZERO));
+
+  // `i512` holds 153 digits and `u512` holds 154.
+  let i512_of = |value: BigInt| i512::from_limbs(bigint::to_limbs(&value, true).expect("fits"));
+  let u512_of = |value: BigInt| u512::from_limbs(bigint::to_limbs(&value, false).expect("fits"));
+  let max_153 = bigint::pow10(153) - 1u8;
+  assert_eq!(
+    D153x0::from_repr(i512_of(max_153.clone())),
+    Some(D153x0::MAX)
+  );
+  assert_eq!(D153x0::from_repr(i512_of(-max_153)), Some(D153x0::MIN));
+  assert_eq!(D153x0::from_repr(i512_of(bigint::pow10(153))), None);
+  assert_eq!(
+    D153x0::from_repr(i512::from_limbs([0, 0, 0, 0, 0, 0, 0, 1 << 63])),
+    None
+  );
+  let max_154 = bigint::pow10(154) - 1u8;
+  assert_eq!(
+    D154x0u512::from_repr(u512_of(max_154)),
+    Some(D154x0u512::MAX)
+  );
+  assert_eq!(D154x0u512::from_repr(u512_of(bigint::pow10(154))), None);
+  assert_eq!(D154x0u512::from_repr(u512::from_limbs([u64::MAX; 8])), None);
+  assert_eq!(D154x0u512::from_repr(u512::ZERO), Some(D154x0u512::ZERO));
 }
 
 #[test]
@@ -1946,11 +2009,28 @@ fn wide_checked_add_and_sub_at_the_storage_limit() {
   assert_eq!(below.checked_add(D96x0::ONE), Some(D96x0::MAX));
   assert_eq!(below.neg().checked_sub(D96x0::ONE), Some(D96x0::MIN));
 
+  // 2 * (10^115 - 1) overflows `i384` itself, on either side.
+  assert_eq!(D97x18::MAX.checked_add(D97x18::MAX), None);
+  assert_eq!(D97x18::MIN.checked_add(D97x18::MIN), None);
+  assert_eq!(D97x18::MAX.checked_sub(D97x18::MIN), None);
+  assert_eq!(D97x18::MAX.checked_add(D97x18::MIN), Some(D97x18::ZERO));
+  assert_eq!(D97x18::MAX.checked_add(D97x18::ONE), None);
+
+  // 2 * (10^154 - 1) overflows `u512` itself, and 10^154 fits.
+  assert_eq!(D154x0u512::MAX.checked_add(D154x0u512::MAX), None);
+  assert_eq!(D154x0u512::MAX.checked_add(D154x0u512::ONE), None);
+  let below = D154x0u512::MAX.checked_sub(D154x0u512::ONE).unwrap();
+  assert_eq!(below.checked_add(D154x0u512::ONE), Some(D154x0u512::MAX));
+  assert_eq!(D154x0u512::ZERO.checked_sub(D154x0u512::ONE), None);
+
   // The other storages hold twice their largest coefficient; the decimal bound rejects the sum.
   assert_eq!(D96x0u320::MAX.checked_add(D96x0u320::MAX), None);
   assert_eq!(D39x18::MAX.checked_add(D39x18::MAX), None);
   assert_eq!(D39x18u192::MAX.checked_add(D39x18u192::MAX), None);
   assert_eq!(D58x18::MIN.checked_add(D58x18::MIN), None);
+  assert_eq!(D97x18u384::MAX.checked_add(D97x18u384::MAX), None);
+  assert_eq!(D116x18::MAX.checked_add(D116x18::MAX), None);
+  assert_eq!(D153x0::MIN.checked_add(D153x0::MIN), None);
 }
 
 #[test]
@@ -2005,6 +2085,31 @@ fn wide_parse_and_display_at_the_limits() {
   assert_eq!(format!("{:012}", value.abs()), "000123456.78");
   assert_eq!(format!("{:+}", value.abs()), "+123456.78");
   assert_eq!(format!("{:>100}", D96x0::MIN), format!("   -{}", nines(96)));
+
+  assert_eq!(D153x0::parse(&nines(153)), Ok(D153x0::MAX));
+  assert_eq!(D153x0::parse(&format!("-{}", nines(153))), Ok(D153x0::MIN));
+  assert_eq!(
+    parse_kind::<D153x0>(&nines(154)),
+    Some(ParseErrorKind::OutOfRange)
+  );
+  assert_eq!(D0x153::parse(&format!("0.{}", nines(153))), Ok(D0x153::MAX));
+  assert_eq!(
+    parse_kind::<D0x153>("1e-154"),
+    Some(ParseErrorKind::Inexact)
+  );
+  assert_eq!(D154x0u512::parse(&nines(154)), Ok(D154x0u512::MAX));
+  assert_eq!(
+    parse_kind::<D154x0u512>(&nines(155)),
+    Some(ParseErrorKind::OutOfRange)
+  );
+  assert_eq!(
+    parse_kind::<D154x0u512>("-0"),
+    Some(ParseErrorKind::InvalidSyntax)
+  );
+  assert_eq!(
+    format!("{:>160}", D153x0::MIN),
+    format!("{:>160}", format!("-{}", nines(153)))
+  );
 }
 
 #[test]
@@ -2046,6 +2151,43 @@ fn wide_exact_mul() {
   // Operands in wide storages whose product type has a native storage.
   let small: Decimal<U2, U0> = Decimal::<U1, U0, i192>::MIN.exact_mul(Decimal::<U1, U0, u320>::MAX);
   assert_eq!(small.repr(), -81);
+
+  // A uint256 amount by a 20-digit price has 98 digits: `i384` for a signed price, `u384` for an
+  // unsigned one.
+  let amount: TokenAmount = "1.5".parse().unwrap();
+  let price: Decimal<U10, U10> = "-1234.5678".parse().unwrap();
+  let notional: Decimal<U70, U28> = amount.exact_mul(price);
+  let _: i384 = notional.repr();
+  assert_eq!(notional.to_string(), "-1851.8517");
+  let price: Decimal<U10, U10, u128> = "1234.5678".parse().unwrap();
+  let notional: Decimal<U70, U28, u384> = amount.exact_mul(price);
+  assert_eq!(notional.to_string(), "1851.8517");
+  let largest: Decimal<U70, U28, u384> = TokenAmount::MAX.exact_mul(Decimal::<U10, U10, u128>::MAX);
+  let max_78 = bigint::pow10(78) - 1u8;
+  let max_20 = bigint::pow10(20) - 1u8;
+  assert_eq!(largest.repr().to_string(), (&max_78 * &max_20).to_string());
+
+  // 120 digits in `i448` or `u448`, and 153 digits in `i512` or `u512`.
+  let square: Decimal<U120, U0> = Decimal::<U60, U0>::MIN.exact_mul(Decimal::<U60, U0>::MAX);
+  let _: i448 = square.repr();
+  let max_60 = bigint::pow10(60) - 1u8;
+  assert_eq!(
+    square.repr().to_string(),
+    (-(&max_60 * &max_60)).to_string()
+  );
+  let square: Decimal<U120, U0, u448> =
+    Decimal::<U60, U0, u256>::MAX.exact_mul(Decimal::<U60, U0, u256>::MAX);
+  assert_eq!(square.repr().to_string(), (&max_60 * &max_60).to_string());
+  let max_77 = bigint::pow10(77) - 1u8;
+  let max_76 = bigint::pow10(76) - 1u8;
+  let widest: Decimal<U153, U0> = Decimal::<U77, U0>::MAX.exact_mul(Decimal::<U76, U0>::MIN);
+  let _: i512 = widest.repr();
+  assert_eq!(
+    widest.repr().to_string(),
+    (-(&max_77 * &max_76)).to_string()
+  );
+  let widest: Decimal<U153, U0, u512> = D77x0u256::MAX.exact_mul(Decimal::<U76, U0, u256>::MAX);
+  assert_eq!(widest.repr().to_string(), (&max_77 * &max_76).to_string());
 }
 
 #[test]
@@ -2069,6 +2211,14 @@ fn wide_widen() {
   assert_eq!(token.to_string(), nines(38));
   let narrow: Decimal<U2, U0, i8> = Decimal::<U1, U0, u192>::MAX.widen();
   assert_eq!(narrow.repr(), 9);
+
+  // Into the widest storages, signed and unsigned.
+  let widest: D135x18 = D96x0::MIN.widen();
+  assert_eq!(widest.to_string(), format!("-{}", nines(96)));
+  let unsigned: D154x0u512 = D77x0u256::MAX.widen();
+  assert_eq!(unsigned.to_string(), nines(77));
+  let signed: D135x18 = D97x18u384::MAX.widen();
+  assert_eq!(signed.to_string(), format!("{}.{}", nines(97), nines(18)));
 }
 
 #[test]
@@ -2171,6 +2321,38 @@ fn wide_try_convert() {
     TokenAmount::MAX.try_convert::<U59, U18, u256>(),
     Err(ConvertError::OutOfRange)
   );
+
+  // The widest unsigned storage holds one digit more than the widest signed one.
+  assert_eq!(
+    D154x0u512::MAX.try_convert::<U153, U0, i512>(),
+    Err(ConvertError::OutOfRange)
+  );
+  assert_eq!(
+    D153x0::MAX
+      .try_convert::<U154, U0, u512>()
+      .map(|value| value.to_string()),
+    Ok(nines(153))
+  );
+  assert_eq!(
+    D153x0::MIN.try_convert::<U154, U0, u512>(),
+    Err(ConvertError::OutOfRange)
+  );
+  assert_eq!(
+    D153x0::ONE.try_convert::<U0, U153, i512>(),
+    Err(ConvertError::OutOfRange)
+  );
+  assert_eq!(
+    D153x0::ZERO.try_convert::<U0, U153, i512>(),
+    Ok(D0x153::ZERO)
+  );
+  assert_eq!(
+    D0x153::MAX.try_convert::<U153, U0, i512>(),
+    Err(ConvertError::Inexact)
+  );
+  assert_eq!(
+    D135x18::MIN.try_convert::<U97, U18, i384>(),
+    Err(ConvertError::OutOfRange)
+  );
 }
 
 #[test]
@@ -2194,6 +2376,8 @@ fn wide_methods_in_const_context() {
   ];
   const LIMBS: [u64; 5] = ONE_TOKEN.repr().to_limbs();
   const ERROR: Result<D96x0, ParseError> = D96x0::parse("1e96");
+  const WIDEST: Result<D154x0u512, ParseError> = D154x0u512::parse("1e153");
+  const WIDEST_OVERFLOW: Option<D154x0u512> = D154x0u512::MAX.checked_add(D154x0u512::ONE);
 
   assert_eq!(ONE_TOKEN, TokenAmount::ONE);
   assert_eq!(
@@ -2208,6 +2392,11 @@ fn wide_methods_in_const_context() {
     ERROR.map_err(|err| err.kind()),
     Err(ParseErrorKind::OutOfRange)
   );
+  assert_eq!(
+    WIDEST.map(|value| value.repr().to_string()),
+    Ok(format!("1{}", zeros(153)))
+  );
+  assert_eq!(WIDEST_OVERFLOW, None);
 }
 
 #[test]

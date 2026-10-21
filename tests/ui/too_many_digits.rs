@@ -1,8 +1,5 @@
-use arbitrary_numbers::{
-  Decimal,
-  typenum::{U48, U49},
-};
+use arbitrary_numbers::{Decimal, typenum::U77};
 
-fn store(_value: Decimal<U49, U48>) {}
+fn store(_value: Decimal<U77, U77>) {}
 
 fn main() {}

@@ -1,0 +1,21 @@
+error[E0061]: this method takes 2 arguments but 1 argument was supplied
+ --> tests/ui/sealed_storage_method.rs:6:22
+  |
+6 |   let _product = lhs.mul(rhs);
+  |                      ^^^----- argument #2 of type `arbitrary_numbers::layout::sealed::Token` is missing
+  |
+note: method defined here
+ --> src/layout.rs
+  |
+  |     fn mul(self, rhs: Self, token: Token) -> Self;
+  |        ^^^
+help: provide the argument
+  |
+6 |   let _product = lhs.mul(rhs, /* arbitrary_numbers::layout::sealed::Token */);
+  |                             ++++++++++++++++++++++++++++++++++++++++++++++++
+
+error[E0277]: the trait bound `arbitrary_numbers::layout::sealed::Token: Default` is not satisfied
+  --> tests/ui/sealed_storage_method.rs:11:31
+   |
+11 |   let _product = lhs.mul(rhs, Default::default());
+   |                               ^^^^^^^^^^^^^^^^^^ the trait `Default` is not implemented for `arbitrary_numbers::layout::sealed::Token`

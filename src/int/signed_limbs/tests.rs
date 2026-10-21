@@ -235,6 +235,9 @@ fn sign_transitions_of_the_top_limb() {
   sign_transitions::<3>();
   sign_transitions::<4>();
   sign_transitions::<5>();
+  sign_transitions::<6>();
+  sign_transitions::<7>();
+  sign_transitions::<8>();
 }
 
 fn digits_of_min_and_max<const N: usize>() {
@@ -251,11 +254,14 @@ fn digits_of_zero_min_and_max() {
   digits_of_min_and_max::<3>();
   digits_of_min_and_max::<4>();
   digits_of_min_and_max::<5>();
+  digits_of_min_and_max::<6>();
+  digits_of_min_and_max::<7>();
+  digits_of_min_and_max::<8>();
   let mut buf = [0; DIGIT_BUF_LEN];
   assert_eq!(
-    write_digits(min::<5>(), &mut buf),
-    0,
-    "|i320::MIN| fills the buffer"
+    write_digits(min::<8>(), &mut buf),
+    1,
+    "|i512::MIN| has one digit fewer than the buffer"
   );
 }
 

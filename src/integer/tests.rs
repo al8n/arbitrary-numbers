@@ -6,7 +6,10 @@ use std::{collections::hash_map::RandomState, format, string::ToString, vec, vec
 
 use num_bigint::BigInt;
 
-use crate::{bigint, i192, i256, i320, u192, u256, u320};
+use crate::{
+  bigint, i192, i256, i320, i384, i448, i512, int::DIGIT_BUF_LEN, u192, u256, u320, u384, u448,
+  u512,
+};
 
 /// Records the calls that a `Hash` implementation makes.
 #[derive(Default)]
@@ -59,14 +62,24 @@ fn trait_surface_and_layout() {
   assert_traits::<u192>();
   assert_traits::<u256>();
   assert_traits::<u320>();
+  assert_traits::<u384>();
+  assert_traits::<u448>();
+  assert_traits::<u512>();
   assert_traits::<i192>();
   assert_traits::<i256>();
   assert_traits::<i320>();
+  assert_traits::<i384>();
+  assert_traits::<i448>();
+  assert_traits::<i512>();
 
   assert_eq!(size_of::<u192>(), 24);
   assert_eq!(size_of::<i256>(), 32);
   assert_eq!(size_of::<u320>(), 40);
+  assert_eq!(size_of::<i384>(), 48);
+  assert_eq!(size_of::<u448>(), 56);
+  assert_eq!(size_of::<i512>(), 64);
   assert_eq!(align_of::<i320>(), align_of::<u64>());
+  assert_eq!(align_of::<u512>(), align_of::<u64>());
   assert_eq!(size_of::<Option<u256>>(), size_of::<Option<[u64; 4]>>());
 }
 
@@ -170,6 +183,9 @@ macro_rules! integer_tests {
             "{:?}",
             "{:>120?}",
             "{:+0120?}",
+            "{:160}",
+            "{:^161}",
+            "{:+0160}",
           );
         }
       }
@@ -181,9 +197,15 @@ integer_tests!(
   unsigned_192: u192, false, 3;
   unsigned_256: u256, false, 4;
   unsigned_320: u320, false, 5;
+  unsigned_384: u384, false, 6;
+  unsigned_448: u448, false, 7;
+  unsigned_512: u512, false, 8;
   signed_192: i192, true, 3;
   signed_256: i256, true, 4;
   signed_320: i320, true, 5;
+  signed_384: i384, true, 6;
+  signed_448: i448, true, 7;
+  signed_512: i512, true, 8;
 );
 
 #[test]
@@ -229,6 +251,21 @@ fn signed_order_runs_from_min_to_max() {
   assert_eq!(
     i320::from_limbs([0, 0, 0, 0, 1 << 63]).to_string().len(),
     98
+  );
+}
+
+#[test]
+fn the_widest_values_fill_the_digit_buffer() {
+  // `u512::MAX` has 155 digits, and `i512::MIN` has 154 and a sign.
+  assert_eq!(
+    u512::from_limbs([u64::MAX; 8]).to_string().len(),
+    DIGIT_BUF_LEN
+  );
+  assert_eq!(
+    i512::from_limbs([0, 0, 0, 0, 0, 0, 0, 1 << 63])
+      .to_string()
+      .len(),
+    DIGIT_BUF_LEN
   );
 }
 

@@ -14,7 +14,9 @@ pub use error::{ConvertError, ParseError, ParseErrorKind};
 
 use crate::{
   int,
-  layout::{DigitCount, Layout, Pick, SealedLayout, SealedStorage, Storage, Widen, WidenRepr},
+  layout::{
+    DigitCount, Layout, Pick, SealedLayout, SealedStorage, Storage, Token, Widen, WidenRepr,
+  },
 };
 
 mod error;
@@ -39,11 +41,13 @@ mod tests;
 /// `Integral` and `Fraction` are [`typenum`] numbers such as `U8` or `U<8>`. `Repr` defaults to
 /// the smallest signed integer that holds `Integral + Fraction` digits (see [`DigitCount`]): a
 /// native integer up to 38 digits, and beyond that the wide integers [`i192`](crate::i192),
-/// [`i256`](crate::i256) and [`i320`](crate::i320), which hold 57, 76 and 96 digits. Any other
-/// storage that holds the digits can be named explicitly: a wider one, or an unsigned one for
-/// values that are never negative. An unsigned `Repr` holds as many digits as the signed one of
-/// the same width, except that `u64` holds 19 digits and `i64` 18, and [`u256`](crate::u256)
-/// holds 77 and `i256` 76. The type has the size, alignment and ABI of `Repr`.
+/// [`i256`](crate::i256), [`i320`](crate::i320), [`i384`](crate::i384), [`i448`](crate::i448) and
+/// [`i512`](crate::i512), which hold 57, 76, 96, 115, 134 and 153 digits. Any other storage that
+/// holds the digits can be named explicitly: a wider one, or an unsigned one for values that are
+/// never negative. An unsigned `Repr` holds as many digits as the signed one of the same width,
+/// except that `u64` holds 19 digits and `i64` 18, [`u256`](crate::u256) holds 77 and `i256` 76,
+/// and [`u512`](crate::u512) holds 154 and `i512` 153. Only an explicit `u512` holds 154 digits.
+/// The type has the size, alignment and ABI of `Repr`.
 ///
 /// ```
 /// use arbitrary_numbers::{
@@ -65,9 +69,9 @@ mod tests;
 /// assert_eq!(size_of::<TokenAmount>(), 40);
 /// ```
 ///
-/// A combination that does not fit is rejected during type checking: zero digits, more than 96
+/// A combination that does not fit is rejected during type checking: zero digits, more than 154
 /// digits, or a `Repr` too small for `Integral + Fraction` digits. With the default `Repr`, zero
-/// digits or more than 96 digits fail wherever the type is written, because the default storage
+/// digits or more than 153 digits fail wherever the type is written, because the default storage
 /// must be computed. With an explicit `Repr`, a combination that does not fit can be written, but
 /// its constants and constructors fail to compile, so no value of the type can be created.
 ///
@@ -232,8 +236,9 @@ where
   /// The result has `Integral + I2` integral digits and `Fraction + F2` fraction digits, so the
   /// product always fits and is never rounded. It is stored in the smallest unsigned storage for
   /// its digits if both operands have unsigned storages, and in the smallest signed storage for
-  /// its digits otherwise (see [`DigitCount`] and [`Pick`]). A product type with more than 96
-  /// digits fails to compile; [`try_convert`](Self::try_convert) can narrow an operand first.
+  /// its digits otherwise (see [`DigitCount`] and [`Pick`]). A product type with more than 153
+  /// digits fails to compile, whatever the signs of the operands;
+  /// [`try_convert`](Self::try_convert) can narrow an operand first.
   ///
   /// ```
   /// use arbitrary_numbers::{
@@ -285,9 +290,9 @@ where
     // so both operands convert to it exactly. Their product has at most as many digits as the
     // operands together, which is the digit count of its type, so it fits that storage as well.
     // Between native storages, the conversions are casts and the multiplication is native.
-    let lhs = self.repr.convert();
-    let rhs = rhs.repr.convert();
-    Decimal::from_coeff(SealedStorage::mul(lhs, rhs))
+    let lhs = self.repr.convert(Token::new());
+    let rhs = rhs.repr.convert(Token::new());
+    Decimal::from_coeff(SealedStorage::mul(lhs, rhs, Token::new()))
   }
 }
 
@@ -331,8 +336,8 @@ where
     // most `I + F2 <= I2 + F2` digits. `R2` is unsigned only if `R` is, and then the coefficient
     // is not negative.
     let scale = Decimal::<I2, F2, R2>::FRACTION - Self::FRACTION;
-    let coeff: R2 = self.repr.convert();
-    Decimal::from_coeff(coeff.mul_pow10(scale))
+    let coeff: R2 = self.repr.convert(Token::new());
+    Decimal::from_coeff(coeff.mul_pow10(scale, Token::new()))
   }
 
   /// Converts to any decimal type, failing instead of losing digits.
@@ -387,7 +392,7 @@ where
     // Checked before scaling, so that a negative value that truncates to zero, such as `-0.5`,
     // is out of range rather than inexact. A value that remains is never negative for an unsigned
     // target.
-    if self.repr.is_negative() && !R2::SIGNED {
+    if self.repr.is_negative(Token::new()) && !R2::SIGNED {
       return Err(ConvertError::OutOfRange);
     }
     let from = Self::FRACTION;
@@ -400,9 +405,9 @@ where
     let converted = if to >= from {
       // Scaled in `R2`, which holds every scaled value in range, while `R` may not. A value that
       // `R2` cannot hold is out of range even before scaling.
-      match self.repr.checked_convert::<R2>() {
-        Some(coeff) => match coeff.checked_mul_pow10(to - from) {
-          Some(scaled) if scaled.within_digits(digits) => scaled,
+      match self.repr.checked_convert::<R2>(Token::new()) {
+        Some(coeff) => match coeff.checked_mul_pow10(to - from, Token::new()) {
+          Some(scaled) if scaled.within_digits(digits, Token::new()) => scaled,
           _ => return Err(ConvertError::OutOfRange),
         },
         None => return Err(ConvertError::OutOfRange),
@@ -411,10 +416,10 @@ where
       // Divided in `R`, which holds `10^(from - to)`. The truncated quotient is in range exactly
       // when the value's integral part has at most `I2` digits, so range is decided before
       // exactness.
-      let (quotient, remainder) = self.repr.div_rem_pow10(from - to);
-      match quotient.checked_convert::<R2>() {
-        Some(quotient) if quotient.within_digits(digits) => {
-          if !remainder.is_zero() {
+      let (quotient, remainder) = self.repr.div_rem_pow10(from - to, Token::new());
+      match quotient.checked_convert::<R2>(Token::new()) {
+        Some(quotient) if quotient.within_digits(digits, Token::new()) => {
+          if !remainder.is_zero(Token::new()) {
             return Err(ConvertError::Inexact);
           }
           quotient
@@ -489,10 +494,10 @@ where
   /// described on [`Decimal`]. Precision never rounds or truncates.
   fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
     let mut buf = [0; int::DIGIT_BUF_LEN];
-    let start = self.repr.write_digits(&mut buf);
+    let start = self.repr.write_digits(&mut buf, Token::new());
     format::write(
       f,
-      self.repr.is_negative(),
+      self.repr.is_negative(Token::new()),
       &buf[start..],
       Self::FRACTION as usize,
     )

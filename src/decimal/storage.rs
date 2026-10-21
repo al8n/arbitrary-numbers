@@ -3,7 +3,9 @@ use core::{ops::Neg, str::FromStr};
 use typenum::NonZero;
 
 use super::{Decimal, ParseError, parse};
-use crate::{i192, i256, i320, int, layout::Layout, u192, u256, u320};
+use crate::{
+  i192, i256, i320, i384, i448, i512, int, layout::Layout, u192, u256, u320, u384, u448, u512,
+};
 
 /// Implements the constants, `const fn` methods and traits that depend only on the storage, for
 /// each listed storage with its sign, `signed` or `unsigned`, and its kind, `native` or `wide`.
@@ -457,6 +459,9 @@ storage_decimal!(
   i192: signed wide,
   i256: signed wide,
   i320: signed wide,
+  i384: signed wide,
+  i448: signed wide,
+  i512: signed wide,
   u8: unsigned native,
   u16: unsigned native,
   u32: unsigned native,
@@ -465,4 +470,7 @@ storage_decimal!(
   u192: unsigned wide,
   u256: unsigned wide,
   u320: unsigned wide,
+  u384: unsigned wide,
+  u448: unsigned wide,
+  u512: unsigned wide,
 );

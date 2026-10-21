@@ -7,18 +7,18 @@ use core::{
   marker::PhantomData,
 };
 
-use typenum::{U192, U256, U320};
+use typenum::{U192, U256, U320, U384, U448, U512};
 
 use crate::int::{self, DIGIT_BUF_LEN};
 
 /// An unsigned integer of `Bits` bits, stored in `Repr`.
 ///
 /// The value runs from zero to `2^Bits - 1`. `Bits` is a [`typenum`] number. The aliases
-/// [`u192`], [`u256`] and [`u320`] store their value in arrays of 64-bit limbs, least significant
-/// first, and are the widths provided. Each has [`ZERO`](u256::ZERO),
-/// [`from_limbs`](u256::from_limbs) and [`to_limbs`](u256::to_limbs), numeric equality, ordering
-/// and hashing, and decimal formatting; there is no arithmetic. The type has the size, alignment
-/// and ABI of `Repr`.
+/// [`u192`], [`u256`], [`u320`], [`u384`], [`u448`] and [`u512`] store their value in arrays of
+/// 64-bit limbs, least significant first, and are the widths provided. Each has
+/// [`ZERO`](u256::ZERO), [`from_limbs`](u256::from_limbs) and [`to_limbs`](u256::to_limbs),
+/// numeric equality, ordering and hashing, and decimal formatting; there is no arithmetic. The type
+/// has the size, alignment and ABI of `Repr`.
 ///
 /// These integers are the wide storages of [`Decimal`](crate::Decimal):
 ///
@@ -57,11 +57,11 @@ pub struct Uint<Bits, Repr> {
 /// A signed integer of `Bits` bits in two's complement, stored in `Repr`.
 ///
 /// The value runs from `-2^(Bits - 1)` to `2^(Bits - 1) - 1`. `Bits` is a [`typenum`] number. The
-/// aliases [`i192`], [`i256`] and [`i320`] store their value in arrays of 64-bit limbs, least
-/// significant first, and are the widths provided. Each has [`ZERO`](i256::ZERO),
-/// [`from_limbs`](i256::from_limbs) and [`to_limbs`](i256::to_limbs), numeric equality, ordering
-/// and hashing, and decimal formatting; there is no arithmetic. The type has the size, alignment
-/// and ABI of `Repr`.
+/// aliases [`i192`], [`i256`], [`i320`], [`i384`], [`i448`] and [`i512`] store their value in
+/// arrays of 64-bit limbs, least significant first, and are the widths provided. Each has
+/// [`ZERO`](i256::ZERO), [`from_limbs`](i256::from_limbs) and [`to_limbs`](i256::to_limbs), numeric
+/// equality, ordering and hashing, and decimal formatting; there is no arithmetic. The type has the
+/// size, alignment and ABI of `Repr`.
 ///
 /// ```
 /// use arbitrary_numbers::i256;
@@ -99,6 +99,18 @@ pub type u256 = Uint<U256, [u64; 4]>;
 #[allow(non_camel_case_types)]
 pub type u320 = Uint<U320, [u64; 5]>;
 
+/// A 384-bit unsigned integer, stored in six 64-bit limbs.
+#[allow(non_camel_case_types)]
+pub type u384 = Uint<U384, [u64; 6]>;
+
+/// A 448-bit unsigned integer, stored in seven 64-bit limbs.
+#[allow(non_camel_case_types)]
+pub type u448 = Uint<U448, [u64; 7]>;
+
+/// A 512-bit unsigned integer, stored in eight 64-bit limbs.
+#[allow(non_camel_case_types)]
+pub type u512 = Uint<U512, [u64; 8]>;
+
 /// A 192-bit signed integer, stored in three 64-bit limbs in two's complement.
 #[allow(non_camel_case_types)]
 pub type i192 = Int<U192, [u64; 3]>;
@@ -110,6 +122,18 @@ pub type i256 = Int<U256, [u64; 4]>;
 /// A 320-bit signed integer, stored in five 64-bit limbs in two's complement.
 #[allow(non_camel_case_types)]
 pub type i320 = Int<U320, [u64; 5]>;
+
+/// A 384-bit signed integer, stored in six 64-bit limbs in two's complement.
+#[allow(non_camel_case_types)]
+pub type i384 = Int<U384, [u64; 6]>;
+
+/// A 448-bit signed integer, stored in seven 64-bit limbs in two's complement.
+#[allow(non_camel_case_types)]
+pub type i448 = Int<U448, [u64; 7]>;
+
+/// A 512-bit signed integer, stored in eight 64-bit limbs in two's complement.
+#[allow(non_camel_case_types)]
+pub type i512 = Int<U512, [u64; 8]>;
 
 // The API is implemented for each alias rather than for every `Bits`: a width that does not fill
 // its limbs, such as 200 bits in `[u64; 4]`, has bit patterns that are not values, so its
@@ -237,10 +261,16 @@ macro_rules! wide_integer {
 wide_integer!(unsigned u192: 3);
 wide_integer!(unsigned u256: 4);
 wide_integer!(unsigned u320: 5);
+wide_integer!(unsigned u384: 6);
+wide_integer!(unsigned u448: 7);
+wide_integer!(unsigned u512: 8);
 
 wide_integer!(signed i192: 3);
 wide_integer!(signed i256: 4);
 wide_integer!(signed i320: 5);
+wide_integer!(signed i384: 6);
+wide_integer!(signed i448: 7);
+wide_integer!(signed i512: 8);
 
 /// Views digits produced by the integer core, which are always ASCII, as a string.
 const fn ascii(digits: &[u8]) -> Result<&str, fmt::Error> {

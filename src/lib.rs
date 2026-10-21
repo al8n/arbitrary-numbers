@@ -3,9 +3,9 @@
 //! [`Decimal<Integral, Fraction, Repr>`](Decimal) stores the value `c / 10^Fraction` as an integer
 //! coefficient `c` of type `Repr`, with `|c| <= 10^(Integral + Fraction) - 1`. The digit counts
 //! are [`typenum`] numbers, so capacity is checked during type checking: no value can be created
-//! for a type with more than 96 digits or with a `Repr` that cannot hold its digits. `Repr`
-//! defaults to the smallest signed integer that holds the digits; an unsigned `Repr`, such as
-//! `u64` for up to 19 digits, gives a type whose values are never negative.
+//! for a type with more than 154 digits or with a `Repr` that cannot hold its digits. `Repr`
+//! defaults to the smallest signed integer that holds the digits, up to 153 digits; an unsigned
+//! `Repr`, such as `u64` for up to 19 digits, gives a type whose values are never negative.
 //!
 //! ```
 //! use arbitrary_numbers::{
@@ -35,11 +35,14 @@
 //!
 //! # Wide storage
 //!
-//! Up to 38 digits, `Repr` is a native integer. Beyond that, up to 96 digits, it is one of the
+//! Up to 38 digits, `Repr` is a native integer. Beyond that, up to 153 digits, it is one of the
 //! wide integers of this crate, aliases of [`Uint`] and [`Int`] that store 64-bit limbs: the signed
-//! [`i192`], [`i256`] and [`i320`] hold 57, 76 and 96 digits, and the unsigned [`u192`], [`u256`]
-//! and [`u320`] hold 57, 77 and 96. So any uint256 amount, which has at most 78 digits, fits a
-//! `u320`. A product with more than 96 digits fails to compile.
+//! [`i192`], [`i256`], [`i320`], [`i384`], [`i448`] and [`i512`] hold 57, 76, 96, 115, 134 and 153
+//! digits, and the unsigned [`u192`], [`u256`], [`u320`], [`u384`], [`u448`] and [`u512`] hold 57,
+//! 77, 96, 115, 134 and 154. So any uint256 amount, which has at most 78 digits, fits a `u320`. The
+//! 154th digit is available only with an explicit `u512`, as in `Decimal<U154, U0, u512>`; the
+//! default storage and the product of [`exact_mul`](Decimal::exact_mul) stop at 153 digits, and a
+//! product with more digits fails to compile.
 //!
 //! A wide coefficient is built from its limbs, least significant first, and
 //! [`from_repr`](Decimal::from_repr) returns `None` when it is out of range. Parsing decimal text
@@ -91,7 +94,9 @@ mod bigint;
 pub use typenum;
 
 pub use decimal::{ConvertError, Decimal, ParseError, ParseErrorKind};
-pub use integer::{Int, Uint, i192, i256, i320, u192, u256, u320};
+pub use integer::{
+  Int, Uint, i192, i256, i320, i384, i448, i512, u192, u256, u320, u384, u448, u512,
+};
 pub use layout::{DigitCount, FitsDigits, Layout, Pick, Storage, Widen, WidenRepr};
 
 mod decimal;

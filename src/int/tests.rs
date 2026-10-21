@@ -221,9 +221,11 @@ core_tests!(
   signed i128,
 );
 
-/// Tests of the modules for the wide storages against `num-bigint`.
+/// Tests of the modules for the wide storages against `num-bigint`. Each storage is listed with its
+/// number of limbs, the most digits it holds, and whether twice the largest coefficient of that many
+/// digits still fits it.
 macro_rules! wide_tests {
-  ($($sign:ident $int:ident: $limbs:literal),+ $(,)?) => {$(
+  ($($sign:ident $int:ident: $limbs:literal, $digits:literal, $sums_fit:literal),+ $(,)?) => {$(
     mod $int {
       use num_bigint::{BigInt, Sign};
       use std::{string::ToString, vec, vec::Vec};
@@ -346,6 +348,16 @@ macro_rules! wide_tests {
       }
 
       #[test]
+      fn sums_of_the_largest_coefficient() {
+        assert_eq!(bigint::max_exp(&max()), $digits);
+        let largest = wide::max_magnitude($digits);
+        assert_eq!(big(largest), bigint::pow10($digits) - 1u8);
+        let sum = wide::checked_add(largest, largest);
+        assert_eq!(sum.is_some(), $sums_fit);
+        assert_eq!(sum, from_big(&(big(largest) * 2u8)));
+      }
+
+      #[test]
       fn multiplication() {
         let samples = with_big(edges());
         for &(a, ref big_a) in &samples {
@@ -456,10 +468,16 @@ macro_rules! wide_tests {
 }
 
 wide_tests!(
-  unsigned u192: 3,
-  unsigned u256: 4,
-  unsigned u320: 5,
-  signed i192: 3,
-  signed i256: 4,
-  signed i320: 5,
+  unsigned u192: 3, 57, true,
+  unsigned u256: 4, 77, false,
+  unsigned u320: 5, 96, true,
+  unsigned u384: 6, 115, true,
+  unsigned u448: 7, 134, true,
+  unsigned u512: 8, 154, false,
+  signed i192: 3, 57, true,
+  signed i256: 4, 76, true,
+  signed i320: 5, 96, false,
+  signed i384: 6, 115, false,
+  signed i448: 7, 134, true,
+  signed i512: 8, 153, true,
 );

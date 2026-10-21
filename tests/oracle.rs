@@ -10,12 +10,13 @@
 //! wide.
 
 use arbitrary_numbers::{
-  ConvertError, Decimal, ParseErrorKind, i192, i256, i320,
+  ConvertError, Decimal, ParseErrorKind, i192, i256, i320, i384, i448, i512,
   typenum::{
     U0, U1, U2, U3, U4, U5, U6, U7, U8, U9, U10, U11, U12, U14, U16, U17, U18, U19, U20, U22, U26,
-    U36, U37, U38, U39, U49, U58, U59, U60, U61, U69, U76, U78, U96,
+    U28, U36, U37, U38, U39, U49, U58, U59, U60, U61, U69, U70, U76, U78, U79, U90, U96, U97, U98,
+    U116, U117, U135, U153, U154,
   },
-  u192, u256, u320,
+  u192, u256, u320, u384, u448, u512,
 };
 use num_bigint::{BigInt, Sign};
 use proptest::{prelude::*, test_runner::RngSeed};
@@ -136,9 +137,15 @@ wide_repr!(
   i192: true, 3,
   i256: true, 4,
   i320: true, 5,
+  i384: true, 6,
+  i448: true, 7,
+  i512: true, 8,
   u192: false, 3,
   u256: false, 4,
-  u320: false, 5
+  u320: false, 5,
+  u384: false, 6,
+  u448: false, 7,
+  u512: false, 8
 );
 
 /// The shortest exact text of `coeff / 10^fraction`, padded to at least `precision` fraction
@@ -250,8 +257,8 @@ fn oracle_parse(
     return Ok(BigInt::ZERO);
   }
   // A nonzero mantissa has at most `input.len()` digits, so scaled by an exponent beyond this
-  // bound it is at least `10^100` or below `10^-100`: out of range, or inexact for every type.
-  let bound = BigInt::from(input.len() + 100);
+  // bound it is at least `10^200` or below `10^-200`: out of range, or inexact for every type.
+  let bound = BigInt::from(input.len() + 200);
   if exponent > bound {
     return Err(ParseErrorKind::OutOfRange);
   }
@@ -717,6 +724,32 @@ suite!(uw96x0: Decimal<U96, U0, u320>, u320, unsigned, integral = 96, fraction =
 // Any uint256 amount with 18 fraction digits.
 suite!(uint256: Decimal<U60, U18, u320>, u320, unsigned, integral = 60, fraction = 18);
 
+// Each of the storages from 384 to 512 bits, at the fewest and the most digits that it holds.
+suite!(w79x18: Decimal<U79, U18>, i384, signed, integral = 79, fraction = 18);
+suite!(w97x18: Decimal<U97, U18>, i384, signed, integral = 97, fraction = 18);
+suite!(w98x18: Decimal<U98, U18>, i448, signed, integral = 98, fraction = 18);
+suite!(w116x18: Decimal<U116, U18>, i448, signed, integral = 116, fraction = 18);
+suite!(w117x18: Decimal<U117, U18>, i512, signed, integral = 117, fraction = 18);
+suite!(w135x18: Decimal<U135, U18>, i512, signed, integral = 135, fraction = 18);
+suite!(w153x0: Decimal<U153, U0>, i512, signed, integral = 153, fraction = 0);
+suite!(w0x153: Decimal<U0, U153>, i512, signed, integral = 0, fraction = 153);
+suite!(d2x2_in_i512: Decimal<U2, U2, i512>, i512, signed, integral = 2, fraction = 2);
+
+suite!(uw79x18: Decimal<U79, U18, u384>, u384, unsigned, integral = 79, fraction = 18);
+suite!(uw97x18: Decimal<U97, U18, u384>, u384, unsigned, integral = 97, fraction = 18);
+suite!(uw98x18: Decimal<U98, U18, u448>, u448, unsigned, integral = 98, fraction = 18);
+suite!(uw116x18: Decimal<U116, U18, u448>, u448, unsigned, integral = 116, fraction = 18);
+suite!(uw117x18: Decimal<U117, U18, u512>, u512, unsigned, integral = 117, fraction = 18);
+suite!(uw135x18: Decimal<U135, U18, u512>, u512, unsigned, integral = 135, fraction = 18);
+// 154 digits, one more than any signed storage holds.
+suite!(uw154x0: Decimal<U154, U0, u512>, u512, unsigned, integral = 154, fraction = 0);
+suite!(uw0x154: Decimal<U0, U154, u512>, u512, unsigned, integral = 0, fraction = 154);
+
+// Operands for products and conversions.
+suite!(d10x10: Decimal<U10, U10>, i128, signed, integral = 10, fraction = 10);
+suite!(u10x10: Decimal<U10, U10, u128>, u128, unsigned, integral = 10, fraction = 10);
+suite!(uw58x18: Decimal<U58, U18, u256>, u256, unsigned, integral = 58, fraction = 18);
+
 /// The reference and the crate both agree with coefficients computed by hand, so that they cannot
 /// share a mistake unnoticed.
 #[test]
@@ -861,6 +894,26 @@ exact_mul!(mul_u256_by_i8: uw59x18 * d1x1 = Decimal<U60, U19>);
 exact_mul!(mul_i64_by_u256: d10x8 * uw59x18 = Decimal<U69, U26>);
 exact_mul!(mul_uint256_by_u8: uint256 * u1x1 = Decimal<U61, U19, u320>);
 
+// Products of 97 to 153 digits, in the storages from 384 to 512 bits. A uint256 amount by a
+// 20-digit price has 98 digits.
+exact_mul!(mul_uint256_by_signed_price: uint256 * d10x10 = Decimal<U70, U28>);
+exact_mul!(mul_uint256_by_unsigned_price: uint256 * u10x10 = Decimal<U70, U28, u384>);
+exact_mul!(mul_into_i384_limit: w58x18 * w20x19 = Decimal<U78, U37>);
+exact_mul!(mul_into_u384_limit: uw58x18 * uw20x19 = Decimal<U78, U37, u384>);
+exact_mul!(mul_into_i448_start: w78x18 * d12x8 = Decimal<U90, U26>);
+exact_mul!(mul_into_i448_limit: w58x18 * w39x18 = Decimal<U97, U36>);
+exact_mul!(mul_into_u448_start: uw59x18 * uw20x19 = Decimal<U79, U37, u448>);
+exact_mul!(mul_into_u448_limit: uw59x18 * uw39x18 = Decimal<U98, U36, u448>);
+exact_mul!(mul_into_i512_start: w96x0 * w20x19 = Decimal<U116, U19>);
+exact_mul!(mul_into_u512_start: uw96x0 * uw20x19 = Decimal<U116, U19, u512>);
+// 77 digits by 76 digits, the widest product.
+exact_mul!(mul_u256_by_i256_into_i512: uw59x18 * w58x18 = Decimal<U117, U36>);
+exact_mul!(mul_u256_by_u256_into_u512: uw59x18 * uw58x18 = Decimal<U117, U36, u512>);
+// A wide operand whose product is in a wider storage, and one whose product is native.
+exact_mul!(mul_i384_by_i8: w97x18 * d1x1 = Decimal<U98, U19>);
+exact_mul!(mul_u384_by_u8: uw97x18 * u1x1 = Decimal<U98, U19, u448>);
+exact_mul!(mul_i512_by_i8: d2x2_in_i512 * d1x1 = Decimal<U3, U3>);
+
 macro_rules! convert {
   ($name:ident: $source:ident -> $target:ident) => {
     proptest! {
@@ -925,6 +978,43 @@ convert!(convert_u128_to_i320: u38x0 -> w96x0);
 convert!(convert_i64_to_u192: d10x8 -> uw39x18);
 convert!(convert_i8_to_explicit_i320: d1x1 -> d2x2_in_i320);
 
+// Between the storages from 384 to 512 bits, and with every other wide storage.
+convert!(convert_i384_to_i448: w97x18 -> w116x18);
+convert!(convert_i448_to_i384: w116x18 -> w97x18);
+convert!(convert_i512_to_i448: w135x18 -> w116x18);
+convert!(convert_i384_to_i512: w97x18 -> w135x18);
+convert!(convert_u384_to_u448: uw97x18 -> uw116x18);
+convert!(convert_u512_to_u384: uw135x18 -> uw97x18);
+convert!(convert_u448_to_u512: uw116x18 -> uw135x18);
+convert!(convert_i320_to_i384: w78x18 -> w97x18);
+convert!(convert_i384_to_i320: w97x18 -> w78x18);
+convert!(convert_u320_to_u384: uw78x18 -> uw97x18);
+convert!(convert_u384_to_u320: uw97x18 -> uw78x18);
+convert!(convert_u256_to_u512: uw59x18 -> uw135x18);
+convert!(convert_i512_to_i192: w135x18 -> w39x18);
+convert!(convert_i192_to_i512: w39x18 -> w135x18);
+// Between signs: the widest unsigned storage holds one digit more than the widest signed one.
+convert!(convert_i512_to_u512: w135x18 -> uw135x18);
+convert!(convert_u512_to_i512: uw135x18 -> w135x18);
+convert!(convert_u512_limit_to_i512: uw154x0 -> w153x0);
+convert!(convert_i512_limit_to_u512: w153x0 -> uw154x0);
+convert!(convert_i448_to_u384: w116x18 -> uw97x18);
+convert!(convert_u448_to_i384: uw116x18 -> w97x18);
+// Integral digits to fraction digits and back, by the most digits.
+convert!(convert_i512_integral_to_fraction: w153x0 -> w0x153);
+convert!(convert_i512_fraction_to_integral: w0x153 -> w153x0);
+convert!(convert_u512_integral_to_fraction: uw154x0 -> uw0x154);
+convert!(convert_u512_fraction_to_integral: uw0x154 -> uw154x0);
+// With the native storages, scaling up and down.
+convert!(convert_i512_to_i8: d2x2_in_i512 -> d1x1);
+convert!(convert_i8_to_i512: d1x1 -> d2x2_in_i512);
+convert!(convert_i448_to_i64: w116x18 -> d10x8);
+convert!(convert_i64_to_i448: d10x8 -> w116x18);
+convert!(convert_u512_to_u64: uw135x18 -> u10x9);
+convert!(convert_u128_to_u512_fraction: u19x19 -> uw0x154);
+convert!(convert_i8_fraction_to_i512_fraction: d0x2 -> w0x153);
+convert!(convert_i512_fraction_to_i8_fraction: w0x153 -> d0x2);
+
 macro_rules! widen {
   ($name:ident: $source:ident -> $target:ident) => {
     proptest! {
@@ -969,6 +1059,26 @@ widen!(widen_u256_to_u320: uw59x18 -> uw78x18);
 widen!(widen_u256_to_uint256: uw59x18 -> uint256);
 widen!(widen_u192_to_i256: uw39x18 -> w58x18);
 widen!(widen_u256_to_i320: uw59x18 -> w78x18);
+
+// Into and between the storages from 384 to 512 bits.
+widen!(widen_i64_to_i384: d10x8 -> w97x18);
+widen!(widen_i128_integral_to_i512: d38x0 -> w153x0);
+widen!(widen_i128_fraction_to_i512: d0x38 -> w0x153);
+widen!(widen_u128_to_u512: u38x0 -> uw154x0);
+widen!(widen_i8_to_explicit_i512: d1x1 -> d2x2_in_i512);
+widen!(widen_i320_to_i384: w78x18 -> w97x18);
+widen!(widen_u320_to_u384: uw78x18 -> uw97x18);
+widen!(widen_i256_to_i448: w58x18 -> w116x18);
+widen!(widen_u256_to_u512: uw59x18 -> uw135x18);
+widen!(widen_i384_to_i448: w97x18 -> w116x18);
+widen!(widen_i448_to_i512: w116x18 -> w135x18);
+widen!(widen_u384_to_u448: uw97x18 -> uw116x18);
+widen!(widen_u448_to_u512: uw116x18 -> uw135x18);
+widen!(widen_u192_to_i512: uw39x18 -> w135x18);
+widen!(widen_u384_to_i448: uw97x18 -> w116x18);
+widen!(widen_u512_to_i512: uw135x18 -> w135x18);
+widen!(widen_u128_to_i512: u38x0 -> w153x0);
+widen!(widen_i8_fraction_to_i512: d0x2 -> w0x153);
 
 /// uint256 amounts of every magnitude, as four limbs, least significant first.
 fn uint256_limbs() -> impl Strategy<Value = [u64; 4]> {
