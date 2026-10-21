@@ -11,8 +11,8 @@ note: method defined here
   |        ^^^
 help: provide the argument
   |
-6 |   let _product = lhs.mul(rhs, /* arbitrary_numbers::layout::sealed::Token */);
-  |                             ++++++++++++++++++++++++++++++++++++++++++++++++
+6 |   let _product = lhs.mul(rhs, /* Token */);
+  |                             +++++++++++++
 
 error[E0277]: the trait bound `arbitrary_numbers::layout::sealed::Token: Default` is not satisfied
   --> tests/ui/sealed_storage_method.rs:11:31
