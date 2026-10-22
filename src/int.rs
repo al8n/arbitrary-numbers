@@ -2,10 +2,10 @@
 //!
 //! `Decimal` performs every operation on its coefficient through this module. The core has two
 //! layers. The lower layer works on magnitudes: it reads and writes decimal digits, computes powers
-//! of ten and scales by them, multiplies, and adds and subtracts with overflow checks. The upper
-//! layer handles the sign and passes magnitude work to the lower layer through `unsigned_abs`. A
-//! function whose implementation does not depend on the sign has the same implementation in both
-//! layers.
+//! of ten and scales by them, multiplies, divides and rounds quotients, and adds and subtracts with
+//! overflow checks. The upper layer handles the sign and passes magnitude work to the lower layer
+//! through `unsigned_abs`. A function whose implementation does not depend on the sign has the same
+//! implementation in both layers.
 //!
 //! Each storage has a module of the same name. For the native storages, the modules for `u8`
 //! through `u128` form the lower layer and the modules for `i8` through `i128` the upper layer. The
@@ -38,7 +38,10 @@ macro_rules! native {
   (unsigned $uint:ident) => {
     #[doc = concat!("Lower layer for `", stringify!($uint), "`.")]
     pub(crate) mod $uint {
+      use core::cmp::Ordering;
+
       use super::{DIGIT_BUF_LEN, DigitBuf};
+      use crate::rounding::{self, RoundingMode};
 
       native!(@shared $uint);
 
@@ -70,6 +73,44 @@ macro_rules! native {
         (value / divisor, value % divisor)
       }
 
+      /// Returns `true` if `mode` rounds a quotient one step away from zero, given the magnitudes
+      /// of the quotient and the remainder of a division rounded toward zero and of the divisor,
+      /// and whether the dividend is negative. Requires `remainder < divisor`.
+      pub(crate) const fn rounds_away(
+        quotient: $uint,
+        remainder: $uint,
+        divisor: $uint,
+        negative: bool,
+        mode: RoundingMode,
+      ) -> bool {
+        // `remainder < divisor`, so this does not overflow.
+        let rest = divisor - remainder;
+        let half = if remainder < rest {
+          Ordering::Less
+        } else if remainder > rest {
+          Ordering::Greater
+        } else {
+          Ordering::Equal
+        };
+        rounding::increments(mode, negative, remainder == 0, half, quotient % 2 == 1)
+      }
+
+      /// `value / divisor` rounded to an integer with `mode`, the remainder of the division
+      /// rounded toward zero, and whether `mode` rounded the quotient away from zero. Requires
+      /// `divisor != 0`.
+      pub(crate) const fn round_div(
+        value: $uint,
+        divisor: $uint,
+        mode: RoundingMode,
+      ) -> ($uint, $uint, bool) {
+        let (quotient, remainder) = div_rem(value, divisor);
+        let away = rounds_away(quotient, remainder, divisor, false, mode);
+        // Rounding away needs a nonzero remainder, so the divisor is at least 2 and the quotient
+        // at most half of `value`: adding one does not overflow.
+        let rounded = if away { quotient + 1 } else { quotient };
+        (rounded, remainder, away)
+      }
+
       /// Zero-extends `value` to two limbs.
       #[inline]
       pub(crate) const fn to_limbs(value: $uint) -> [u64; 2] {
@@ -99,6 +140,7 @@ macro_rules! native {
     )]
     pub(crate) mod $int {
       use super::DigitBuf;
+      use crate::rounding::RoundingMode;
 
       native!(@shared $int);
 
@@ -153,6 +195,34 @@ macro_rules! native {
         }
       }
 
+      /// `value / divisor` rounded to an integer with `mode`, the remainder of the division
+      /// rounded toward zero, which has the sign of `value`, and whether `mode` rounded the
+      /// quotient away from zero. Requires `divisor > 0`.
+      pub(crate) const fn round_div(
+        value: $int,
+        divisor: $int,
+        mode: RoundingMode,
+      ) -> ($int, $int, bool) {
+        let (quotient, remainder) = div_rem(value, divisor);
+        // The sign of the value, which the quotient loses when it is zero.
+        let negative = is_negative(value);
+        let away = super::$uint::rounds_away(
+          quotient.unsigned_abs(),
+          remainder.unsigned_abs(),
+          divisor.unsigned_abs(),
+          negative,
+          mode,
+        );
+        // Rounding away needs a nonzero remainder, so the divisor is at least 2 and `|quotient|`
+        // at most half of `|value|`: one step further from zero does not overflow.
+        let rounded = match (away, negative) {
+          (false, _) => quotient,
+          (true, false) => quotient + 1,
+          (true, true) => quotient - 1,
+        };
+        (rounded, remainder, away)
+      }
+
       /// Sign-extends `value` to two limbs.
       #[inline]
       pub(crate) const fn to_limbs(value: $int) -> [u64; 2] {
@@ -204,6 +274,14 @@ macro_rules! native {
     #[inline]
     pub(crate) const fn mul(lhs: $int, rhs: $int) -> $int {
       lhs * rhs
+    }
+
+    /// Quotient and remainder of `lhs / rhs`, rounding toward zero. For a signed type, as with `/`
+    /// and `%`, the remainder has the sign of `lhs`. Requires `rhs != 0`, and for a signed type
+    /// not `lhs == MIN` with `rhs == -1`.
+    #[inline]
+    pub(crate) const fn div_rem(lhs: $int, rhs: $int) -> ($int, $int) {
+      (lhs / rhs, lhs % rhs)
     }
 
     /// `10^exp`. Requires `10^exp` to be representable.
@@ -280,7 +358,7 @@ macro_rules! wide {
     )]
     pub(crate) mod $uint {
       use super::{DigitBuf, limbs};
-      use crate::$uint;
+      use crate::{$uint, rounding::RoundingMode};
 
       wide!(@shared $uint, limbs, $limbs);
     }
@@ -295,7 +373,7 @@ macro_rules! wide {
     )]
     pub(crate) mod $int {
       use super::{DigitBuf, signed_limbs};
-      use crate::$int;
+      use crate::{$int, rounding::RoundingMode};
 
       wide!(@shared $int, signed_limbs, $limbs);
 
@@ -396,6 +474,29 @@ macro_rules! wide {
     pub(crate) const fn div_rem_pow10(value: $ty, exp: u32) -> ($ty, $ty) {
       let (quotient, remainder) = $layer::div_rem_pow10(value.to_limbs(), exp);
       ($ty::from_limbs(quotient), $ty::from_limbs(remainder))
+    }
+
+    /// Quotient and remainder of `lhs / rhs`, rounding toward zero. For a signed type, as with `/`
+    /// and `%`, the remainder has the sign of `lhs`. Requires `rhs != 0`, and for a signed type
+    /// not `lhs == MIN` with `rhs == -1`.
+    #[inline]
+    pub(crate) const fn div_rem(lhs: $ty, rhs: $ty) -> ($ty, $ty) {
+      let (quotient, remainder) = $layer::div_rem(lhs.to_limbs(), rhs.to_limbs());
+      ($ty::from_limbs(quotient), $ty::from_limbs(remainder))
+    }
+
+    /// `value / divisor` rounded to an integer with `mode`, the remainder of the division rounded
+    /// toward zero, which for a signed type has the sign of `value`, and whether `mode` rounded the
+    /// quotient away from zero. Requires `divisor > 0`.
+    #[inline]
+    pub(crate) const fn round_div(
+      value: $ty,
+      divisor: $ty,
+      mode: RoundingMode,
+    ) -> ($ty, $ty, bool) {
+      let (rounded, remainder, away) =
+        $layer::round_div(value.to_limbs(), divisor.to_limbs(), mode);
+      ($ty::from_limbs(rounded), $ty::from_limbs(remainder), away)
     }
 
     /// Writes the decimal digits of the magnitude of `value` to the end of `buf`, without leading

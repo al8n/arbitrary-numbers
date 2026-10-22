@@ -5,8 +5,8 @@ use num_bigint::BigInt;
 
 use super::{
   abs, checked_add, checked_from_unsigned, checked_mul_pow10, checked_resize, checked_sub,
-  checked_to_unsigned, cmp, div_rem_pow10, is_negative, is_positive, is_zero, le, mul, mul_pow10,
-  neg, push_digits, resize, unsigned_abs, write_digits,
+  checked_to_unsigned, cmp, div_rem, div_rem_pow10, is_negative, is_positive, is_zero, le, mul,
+  mul_pow10, neg, push_digits, resize, round_div, unsigned_abs, write_digits,
 };
 use crate::{bigint, int::DIGIT_BUF_LEN};
 
@@ -302,4 +302,172 @@ fn conversions_between_signs_and_widths() {
       assert_eq!(checked_from_unsigned::<3, 3>(limbs), three_signed);
     }
   }
+}
+
+#[test]
+fn division_matches_i64_and_i128() {
+  let samples = bigint::thin(samples());
+  for &a in &samples {
+    // As for `/` and `%`, a zero divisor and `MIN / -1` are excluded.
+    for &b in samples.iter().filter(|&&b| b != 0) {
+      if let (Ok(a), Ok(b)) = (i64::try_from(a), i64::try_from(b))
+        && (a, b) != (i64::MIN, -1)
+      {
+        let (quotient, remainder) = div_rem([a as u64], [b as u64]);
+        assert_eq!(
+          (quotient[0] as i64, remainder[0] as i64),
+          (a / b, a % b),
+          "{a} / {b}"
+        );
+      }
+      if (a, b) != (i128::MIN, -1) {
+        let (quotient, remainder) = div_rem(from_i128(a), from_i128(b));
+        assert_eq!(
+          (to_i128(quotient), to_i128(remainder)),
+          (a / b, a % b),
+          "{a} / {b}"
+        );
+      }
+    }
+  }
+}
+
+/// The value `value`, which must fit `N` limbs.
+fn limbs<const N: usize>(value: i64) -> [u64; N] {
+  bigint::to_limbs(&BigInt::from(value), true).expect("fits")
+}
+
+fn division_with_min<const N: usize>() {
+  let min = min::<N>();
+  let one = limbs::<N>(1);
+  let mut half_min = [0; N];
+  half_min[N - 1] = 0xc000_0000_0000_0000;
+  assert_eq!(div_rem(min, one), (min, [0; N]));
+  assert_eq!(div_rem(min, limbs(2)), (half_min, [0; N]));
+  assert_eq!(div_rem(min, min), (one, [0; N]));
+  // `2^(64N - 1) = 2 (mod 3)`, an odd power of two, so the remainder is `-2`.
+  let (quotient, remainder) = div_rem(min, limbs(3));
+  assert_eq!(remainder, limbs(-2));
+  assert_eq!(
+    bigint::from_limbs(&quotient, true),
+    bigint::min(64 * N as u32, true) / 3
+  );
+  let min_plus_one =
+    bigint::to_limbs(&(bigint::min(64 * N as u32, true) + 1u8), true).expect("fits");
+  assert_eq!(div_rem(min_plus_one, limbs(-1)), (max::<N>(), [0; N]));
+  assert_eq!(div_rem(limbs::<N>(-7), limbs(2)), (limbs(-3), limbs(-1)));
+  assert_eq!(div_rem(limbs::<N>(7), limbs(-2)), (limbs(-3), limbs(1)));
+  assert_eq!(div_rem(limbs::<N>(-7), limbs(-2)), (limbs(3), limbs(-1)));
+}
+
+#[test]
+fn division_with_min_for_every_width() {
+  division_with_min::<1>();
+  division_with_min::<2>();
+  division_with_min::<3>();
+  division_with_min::<4>();
+  division_with_min::<5>();
+  division_with_min::<6>();
+  division_with_min::<7>();
+  division_with_min::<8>();
+}
+
+/// A deterministic xorshift generator, so that a failure replays from the seed.
+struct Rng(u64);
+
+impl Rng {
+  fn next(&mut self) -> u64 {
+    self.0 ^= self.0 >> 12;
+    self.0 ^= self.0 << 25;
+    self.0 ^= self.0 >> 27;
+    self.0.wrapping_mul(0x2545_f491_4f6c_dd1d)
+  }
+
+  /// A value of either sign whose magnitude has a random number of significant limbs.
+  fn signed<const N: usize>(&mut self) -> [u64; N] {
+    let mut magnitude = [0; N];
+    let count = (self.next() % N as u64) as usize + 1;
+    for limb in &mut magnitude[..count] {
+      *limb = self.next();
+    }
+    magnitude[count - 1] >>= self.next() % 64;
+    magnitude[N - 1] &= u64::MAX >> 1;
+    if self.next().is_multiple_of(2) {
+      magnitude
+    } else {
+      neg(magnitude)
+    }
+  }
+}
+
+fn division_against_big_integers<const N: usize>() {
+  let mut rng = Rng(0x0dd_ba11 ^ N as u64);
+  let count = if cfg!(miri) { 8 } else { 2000 };
+  for _ in 0..count {
+    let (a, b) = (rng.signed::<N>(), rng.signed::<N>());
+    if is_zero(b) {
+      continue;
+    }
+    let (quotient, remainder) = div_rem(a, b);
+    let (big_a, big_b) = (bigint::from_limbs(&a, true), bigint::from_limbs(&b, true));
+    // `num-bigint` rounds toward zero, as `/` and `%` do.
+    assert_eq!(bigint::from_limbs(&quotient, true), &big_a / &big_b);
+    assert_eq!(bigint::from_limbs(&remainder, true), &big_a % &big_b);
+  }
+}
+
+#[test]
+fn division_against_big_integers_for_every_width() {
+  division_against_big_integers::<3>();
+  division_against_big_integers::<4>();
+  division_against_big_integers::<8>();
+}
+
+/// Checks `round_div(value, divisor, mode)` against rounding by distance.
+fn check_rounding<const N: usize>(value: [u64; N], divisor: [u64; N]) {
+  let (big_value, big_divisor) = (
+    bigint::from_limbs(&value, true),
+    bigint::from_limbs(&divisor, true),
+  );
+  let truncated = &big_value / &big_divisor;
+  for mode in bigint::MODES {
+    let (rounded, remainder, away) = round_div(value, divisor, mode);
+    let rounded = bigint::from_limbs(&rounded, true);
+    assert_eq!(
+      rounded,
+      bigint::round(&big_value, &big_divisor, mode),
+      "{big_value} / {big_divisor}, {mode:?}"
+    );
+    assert_eq!(
+      bigint::from_limbs(&remainder, true),
+      &big_value % &big_divisor
+    );
+    assert_eq!(away, rounded != truncated);
+  }
+}
+
+fn rounding_division<const N: usize>() {
+  // Values below the divisor in magnitude, whose quotient is zero, and ties of each parity.
+  for value in [-9, -6, -5, -4, -1, 0, 1, 4, 5, 6, 9, -15, -25, 15, 25] {
+    check_rounding(limbs::<N>(value), limbs(10));
+  }
+  check_rounding(min::<N>(), limbs(3));
+  check_rounding(max::<N>(), limbs(2));
+  let mut rng = Rng(0xfee1_600d ^ N as u64);
+  let count = if cfg!(miri) { 4 } else { 600 };
+  for _ in 0..count {
+    let divisor = unsigned_abs(rng.signed::<N>());
+    if is_zero(divisor) {
+      continue;
+    }
+    check_rounding(rng.signed::<N>(), divisor);
+  }
+}
+
+#[test]
+fn rounding_division_matches_rounding_by_distance() {
+  rounding_division::<1>();
+  rounding_division::<2>();
+  rounding_division::<3>();
+  rounding_division::<8>();
 }

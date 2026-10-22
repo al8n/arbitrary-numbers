@@ -10,13 +10,14 @@ use core::{
 
 use typenum::{And, Sum};
 
-pub use error::{ConvertError, ParseError, ParseErrorKind};
+pub use error::{ConvertError, ParseError, ParseErrorKind, QuantizeError};
 
 use crate::{
   int,
   layout::{
     DigitCount, Layout, Pick, SealedLayout, SealedStorage, Storage, Token, Widen, WidenRepr,
   },
+  rounding::RoundingMode,
 };
 
 mod error;
@@ -94,18 +95,24 @@ mod tests;
 /// # Operations
 ///
 /// Every operation is exact: it returns the exact result or reports failure, and nothing rounds,
-/// truncates or wraps. The operators `+`, `-`, `*` and `/` are not implemented; use
-/// [`checked_add`](Self::checked_add), [`checked_sub`](Self::checked_sub) and
+/// truncates or wraps unless asked to. The operators `+`, `-`, `*` and `/` are not implemented;
+/// use [`checked_add`](Self::checked_add), [`checked_sub`](Self::checked_sub) and
 /// [`exact_mul`](Self::exact_mul). With a signed `Repr`, negation always succeeds because the
 /// range is symmetric, so [`Neg`](core::ops::Neg) is implemented, along with
 /// [`neg`](Self::neg), [`abs`](Self::abs) and [`is_negative`](Self::is_negative). An unsigned
 /// `Repr` has none of them, and its `checked_sub` returns `None` below zero.
 ///
+/// Rounding happens only with an explicit [`RoundingMode`]: [`round_to`](Self::round_to) converts
+/// to a type with fewer fraction digits, and [`quantize`](Self::quantize) rounds to a multiple of a
+/// step, such as a price to a tick size. [`is_multiple_of`](Self::is_multiple_of) checks a value
+/// against a step without rounding it.
+///
 /// Conversions keep track of the sign. [`exact_mul`](Self::exact_mul) stores the product of two
 /// unsigned storages in an unsigned storage and any other product in a signed one;
 /// [`widen`](Self::widen) converts an unsigned storage to any storage but a signed storage only to
 /// a signed one; and [`try_convert`](Self::try_convert) reports a negative value converted to an
-/// unsigned storage as out of range.
+/// unsigned storage as out of range, as does [`round_to`](Self::round_to) unless the value rounds
+/// to zero.
 ///
 /// A wide coefficient is built from 64-bit limbs, least significant first, and
 /// [`from_repr`](Self::from_repr) checks its range. Any uint256 amount, which has at most 78
@@ -428,6 +435,82 @@ where
       }
     };
     Ok(Decimal::from_coeff(converted))
+  }
+
+  /// Converts to any decimal type, rounding with `mode` where the target has fewer fraction
+  /// digits.
+  ///
+  /// This is [`try_convert`](Self::try_convert) with dropped digits rounded instead of reported.
+  /// If `F2` is at least `Fraction`, nothing is dropped, and the result is that of `try_convert`.
+  /// Otherwise the value is rounded to `F2` fraction digits as [`RoundingMode`] describes, and the
+  /// rounded value must fit the target. A negative value that rounds to zero gives zero, which has
+  /// no sign.
+  ///
+  /// # Errors
+  ///
+  /// Returns [`ConvertError::OutOfRange`] if the rounded value is outside the range of the target
+  /// type: if its integral part has more than `I2` digits, as when `9.99` rounds up to `10.0` for
+  /// one integral digit, or if it is negative and `R2` is unsigned. Never returns
+  /// [`ConvertError::Inexact`].
+  ///
+  /// Unlike `try_convert`, which reports every negative value converted to an unsigned storage as
+  /// out of range, the range check applies to the rounded value, so a negative value that rounds to
+  /// zero converts. For no fraction digits and a `u8` storage, `-0.4` with
+  /// [`HalfUp`](RoundingMode::HalfUp) gives zero and `-0.6` is out of range, and `-0.9` with
+  /// [`Ceiling`](RoundingMode::Ceiling) gives zero and with [`Floor`](RoundingMode::Floor) is out
+  /// of range.
+  ///
+  /// ```
+  /// use numo::{
+  ///   ConvertError, Decimal, RoundingMode,
+  ///   typenum::{U0, U1, U2, U4, U10},
+  /// };
+  ///
+  /// let price: Decimal<U10, U4> = "2.345".parse()?;
+  /// let cents: Decimal<U10, U2> = price.round_to(RoundingMode::HalfEven)?;
+  /// assert_eq!(cents.to_string(), "2.34");
+  /// let cents: Decimal<U10, U2> = price.round_to(RoundingMode::HalfUp)?;
+  /// assert_eq!(cents.to_string(), "2.35");
+  /// let cents: Decimal<U10, U2> = price.neg().round_to(RoundingMode::Floor)?;
+  /// assert_eq!(cents.to_string(), "-2.35");
+  ///
+  /// // `9.99` rounds up to `10.0`, which has two integral digits.
+  /// let nines: Decimal<U10, U4> = "9.99".parse()?;
+  /// assert_eq!(
+  ///   nines.round_to::<U1, U1, i8>(RoundingMode::HalfUp),
+  ///   Err(ConvertError::OutOfRange)
+  /// );
+  ///
+  /// // A negative value converts to an unsigned storage if it rounds to zero.
+  /// let small: Decimal<U10, U4> = "-0.4".parse()?;
+  /// let zero: Decimal<U1, U0, u8> = small.round_to(RoundingMode::HalfUp)?;
+  /// assert!(zero.is_zero());
+  /// assert_eq!(
+  ///   small.round_to::<U1, U0, u8>(RoundingMode::Floor),
+  ///   Err(ConvertError::OutOfRange)
+  /// );
+  /// # Ok::<(), Box<dyn core::error::Error>>(())
+  /// ```
+  #[must_use = "this returns the rounded value, without modifying the original"]
+  pub fn round_to<I2, F2, R2>(self, mode: RoundingMode) -> Result<Decimal<I2, F2, R2>, ConvertError>
+  where
+    R2: Storage,
+    (I2, F2): Layout<R2>,
+  {
+    let from = Self::FRACTION;
+    let to = Decimal::<I2, F2, R2>::FRACTION;
+    if to >= from {
+      return self.try_convert();
+    }
+    // Rounded in `R`, which holds `10^(from - to)` and the rounded quotient: its magnitude is at
+    // most `10^(Integral + to)`. The range is then checked in `R2`, as `try_convert` does.
+    let rounded = self.repr.round_div_pow10(from - to, mode, Token::new());
+    match rounded.checked_convert::<R2>(Token::new()) {
+      Some(coeff) if coeff.within_digits(Decimal::<I2, F2, R2>::DIGITS, Token::new()) => {
+        Ok(Decimal::from_coeff(coeff))
+      }
+      _ => Err(ConvertError::OutOfRange),
+    }
   }
 }
 

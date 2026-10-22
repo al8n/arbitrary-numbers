@@ -13,13 +13,14 @@ use std::{
 use num_bigint::BigInt;
 use typenum::{
   U0, U1, U2, U3, U4, U5, U6, U8, U9, U10, U11, U12, U15, U16, U17, U18, U19, U20, U21, U22, U26,
-  U28, U34, U37, U38, U39, U49, U58, U59, U60, U70, U76, U77, U78, U96, U97, U116, U120, U135,
+  U28, U34, U37, U38, U39, U40, U49, U58, U59, U60, U70, U76, U77, U78, U96, U97, U116, U120, U135,
   U153, U154,
 };
 
-use super::{ConvertError, Decimal, ParseError, ParseErrorKind};
+use super::{ConvertError, Decimal, ParseError, ParseErrorKind, QuantizeError};
 use crate::{
-  Layout, Storage, bigint, i192, i256, i320, i384, i448, i512, u192, u256, u320, u384, u448, u512,
+  Layout, RoundingMode, Storage, bigint, i192, i256, i320, i384, i448, i512, u192, u256, u320,
+  u384, u448, u512,
 };
 
 /// `i8` at its 2-digit limit.
@@ -1406,8 +1407,21 @@ fn errors() {
     ConvertError::Inexact.to_string(),
     "decimal cannot be represented exactly in the target type"
   );
+  assert_eq!(
+    QuantizeError::InvalidStep.to_string(),
+    "step must be positive"
+  );
+  assert_eq!(
+    QuantizeError::OutOfRange.to_string(),
+    "quantized decimal out of range of the type"
+  );
 
-  let errors: [&dyn core::error::Error; 2] = [&empty, &ConvertError::Inexact];
+  let errors: [&dyn core::error::Error; 4] = [
+    &empty,
+    &ConvertError::Inexact,
+    &QuantizeError::InvalidStep,
+    &QuantizeError::OutOfRange,
+  ];
   assert!(errors.iter().all(|err| err.source().is_none()));
 }
 
@@ -2452,4 +2466,775 @@ fn wide_ordering_and_hashing() {
   let b: TokenAmount = "0001.5000e0".parse().unwrap();
   assert_eq!(a, b);
   assert_eq!(state.hash_one(a), state.hash_one(b));
+}
+
+/// `i8` without fraction digits.
+type D1x0 = Decimal<U1, U0>;
+type D1x2 = Decimal<U1, U2>;
+type D4x4 = Decimal<U4, U4>;
+/// `i320`, with steps and values of several limbs.
+type D40x40 = Decimal<U40, U40>;
+/// `i192`, with 38 fraction digits.
+type D1x38 = Decimal<U1, U38>;
+/// `u512`, with only fraction digits.
+type D0x154u512 = Decimal<U0, U154, u512>;
+
+/// The table in the documentation of `RoundingMode`: coefficients with one fraction digit, and
+/// what they round to with no fraction digits, in the order of `bigint::MODES`.
+const MODE_TABLE: [(i8, [i8; 7]); 10] = [
+  (55, [6, 5, 6, 5, 6, 5, 6]),
+  (25, [3, 2, 3, 2, 3, 2, 2]),
+  (16, [2, 1, 2, 1, 2, 2, 2]),
+  (11, [2, 1, 2, 1, 1, 1, 1]),
+  (10, [1, 1, 1, 1, 1, 1, 1]),
+  (-10, [-1, -1, -1, -1, -1, -1, -1]),
+  (-11, [-2, -1, -1, -2, -1, -1, -1]),
+  (-16, [-2, -1, -1, -2, -2, -2, -2]),
+  (-25, [-3, -2, -2, -3, -3, -2, -2]),
+  (-55, [-6, -5, -5, -6, -6, -5, -6]),
+];
+
+#[test]
+fn rounding_mode_table() {
+  for (coeff, row) in MODE_TABLE {
+    let value = D1x1::from_repr(coeff).unwrap();
+    let wide: Decimal<U1, U1, i512> = value.widen();
+    for (mode, expected) in bigint::MODES.into_iter().zip(row) {
+      assert_eq!(
+        value.round_to::<U1, U0, i8>(mode).map(|v| v.repr()),
+        Ok(expected),
+        "{value} {mode:?}"
+      );
+      assert_eq!(
+        wide.round_to::<U1, U0, i8>(mode).map(|v| v.repr()),
+        Ok(expected),
+        "{value} {mode:?}"
+      );
+      assert_eq!(
+        value.quantize(D1x1::ONE, mode).map(|v| v.repr()),
+        Ok(expected * 10),
+        "{value} {mode:?}"
+      );
+    }
+  }
+}
+
+/// The rounded quotients are zero or one, so the sign must come from the value, which a quotient
+/// of zero no longer has.
+#[test]
+fn rounding_takes_the_sign_of_the_value() {
+  use RoundingMode::{Ceiling, Floor, HalfDown, HalfEven, HalfUp};
+
+  for (text, mode, expected) in [
+    ("-0.6", HalfUp, -1),
+    ("-0.4", Floor, -1),
+    ("-0.9", Ceiling, 0),
+    ("-0.5", HalfEven, 0),
+    ("-1.5", HalfEven, -2),
+  ] {
+    let value: D1x1 = text.parse().unwrap();
+    assert_eq!(
+      value.round_to::<U1, U0, i8>(mode).map(|v| v.repr()),
+      Ok(expected),
+      "{text} {mode:?}"
+    );
+    let wide: D1x38 = value.widen();
+    assert_eq!(
+      wide.round_to::<U1, U0, i8>(mode).map(|v| v.repr()),
+      Ok(expected),
+      "{text} {mode:?}"
+    );
+  }
+  // The same shapes with steps that are not powers of ten.
+  for (text, step, mode, expected) in [
+    ("-0.2", "0.3", HalfUp, "-0.3"),
+    ("-0.1", "0.3", Floor, "-0.3"),
+    ("-0.2", "0.3", Ceiling, "0"),
+    ("-0.2", "0.4", HalfEven, "0"),
+    ("-0.6", "0.4", HalfEven, "-0.8"),
+    ("-0.2", "0.4", HalfUp, "-0.4"),
+    ("-0.2", "0.4", HalfDown, "0"),
+    ("0.2", "0.4", HalfEven, "0"),
+    ("0.6", "0.4", HalfEven, "0.8"),
+  ] {
+    let (value, step): (D1x1, D1x1) = (text.parse().unwrap(), step.parse().unwrap());
+    assert_eq!(
+      value.quantize(step, mode).map(|v| v.to_string()),
+      Ok(expected.to_string()),
+      "{text} by {step} {mode:?}"
+    );
+    // In a wide storage, where the step has several limbs.
+    let (value, step): (D1x38, D1x38) = (value.widen(), step.widen());
+    assert_eq!(
+      value.quantize(step, mode).map(|v| v.to_string()),
+      Ok(expected.to_string()),
+      "{text} by {step} {mode:?}"
+    );
+  }
+}
+
+#[test]
+fn rounding_to_zero_has_no_sign() {
+  let small: D1x1 = "-0.4".parse().unwrap();
+  let rounded: D1x0 = small.round_to(RoundingMode::HalfUp).unwrap();
+  assert!(rounded.is_zero() && !rounded.is_negative());
+  assert_eq!(rounded.to_string(), "0");
+  let quantized = small.quantize(D1x1::ONE, RoundingMode::Down).unwrap();
+  assert!(quantized.is_zero() && !quantized.is_negative());
+  assert_eq!(quantized.to_string(), "0");
+  let wide: D0x153 = format!("-0.4{}", nines(152)).parse().unwrap();
+  let rounded: D1x0 = wide.round_to(RoundingMode::Ceiling).unwrap();
+  assert_eq!(rounded.to_string(), "0");
+  let quantized = wide.quantize(D0x153::MAX, RoundingMode::Down).unwrap();
+  assert!(quantized.is_zero() && !quantized.is_negative());
+}
+
+/// Unlike `try_convert`, `round_to` checks the rounded value against an unsigned target.
+#[test]
+fn round_to_checks_the_rounded_value_for_an_unsigned_target() {
+  use RoundingMode::{Ceiling, Floor, HalfUp};
+
+  for (text, mode, expected) in [
+    ("-0.4", HalfUp, Ok(0)),
+    ("-0.6", HalfUp, Err(ConvertError::OutOfRange)),
+    ("-0.9", Ceiling, Ok(0)),
+    ("-0.9", Floor, Err(ConvertError::OutOfRange)),
+  ] {
+    let value: D1x1 = text.parse().unwrap();
+    assert_eq!(
+      value.round_to::<U1, U0, u8>(mode).map(|v| v.repr()),
+      expected,
+      "{text} {mode:?}"
+    );
+    let wide: D1x38 = value.widen();
+    assert_eq!(
+      wide.round_to::<U1, U0, u8>(mode).map(|v| v.repr()),
+      expected,
+      "{text} {mode:?}"
+    );
+    assert_eq!(
+      wide.round_to::<U1, U0, u256>(mode).map(|v| v.to_string()),
+      expected.map(|coeff| coeff.to_string()),
+      "{text} {mode:?}"
+    );
+  }
+  // Without dropped digits, as for `try_convert`, a negative value is out of range and zero
+  // converts.
+  let tenth: D1x1 = "-0.1".parse().unwrap();
+  for mode in bigint::MODES {
+    assert_eq!(
+      tenth.round_to::<U1, U1, u8>(mode),
+      Err(ConvertError::OutOfRange)
+    );
+    assert_eq!(
+      tenth.round_to::<U2, U2, u16>(mode),
+      Err(ConvertError::OutOfRange)
+    );
+    assert_eq!(D1x1::ZERO.round_to::<U1, U1, u8>(mode), Ok(D1x1u8::ZERO));
+  }
+}
+
+#[test]
+fn round_to_checks_the_range_after_rounding() {
+  use RoundingMode::{Down, Floor, HalfUp, Up};
+
+  for (text, expected) in [
+    ("9.99", Err(ConvertError::OutOfRange)),
+    ("-9.96", Err(ConvertError::OutOfRange)),
+    ("9.94", Ok(99)),
+  ] {
+    let value: D1x2 = text.parse().unwrap();
+    assert_eq!(
+      value.round_to::<U1, U1, i8>(HalfUp).map(|v| v.repr()),
+      expected,
+      "{text}"
+    );
+  }
+  let value: D2x2 = "99.95".parse().unwrap();
+  assert_eq!(
+    value.round_to::<U2, U1, i16>(Up),
+    Err(ConvertError::OutOfRange)
+  );
+  assert_eq!(
+    value.neg().round_to::<U2, U1, i16>(Floor),
+    Err(ConvertError::OutOfRange)
+  );
+  assert_eq!(
+    value.round_to::<U2, U1, i16>(Down).map(|v| v.repr()),
+    Ok(999)
+  );
+  assert_eq!(
+    Price::MAX.round_to::<U10, U0, i64>(Up),
+    Err(ConvertError::OutOfRange)
+  );
+  assert_eq!(
+    Price::MAX.round_to::<U10, U0, i64>(Down).map(|v| v.repr()),
+    Ok(9_999_999_999)
+  );
+  // A target with one more integral digit holds the carry.
+  assert_eq!(
+    Price::MAX.round_to::<U11, U0, i64>(Up).map(|v| v.repr()),
+    Ok(10_000_000_000)
+  );
+}
+
+/// Rounding away 20, 38, 153 and 154 fraction digits, which divide by powers of ten of two to
+/// eight limbs.
+#[test]
+fn round_to_across_limb_steps() {
+  use RoundingMode::{Ceiling, Down, Floor, HalfDown, HalfEven, HalfUp, Up};
+
+  let half: D0x154u512 = "0.5".parse().unwrap();
+  let below: D0x154u512 = format!("0.4{}", nines(153)).parse().unwrap();
+  for (mode, at_half, below_half) in [
+    (Up, 1, 1),
+    (Down, 0, 0),
+    (Ceiling, 1, 1),
+    (Floor, 0, 0),
+    (HalfUp, 1, 0),
+    (HalfDown, 0, 0),
+    (HalfEven, 0, 0),
+  ] {
+    assert_eq!(
+      half.round_to::<U1, U0, u8>(mode).map(|v| v.repr()),
+      Ok(at_half),
+      "{mode:?}"
+    );
+    assert_eq!(
+      below.round_to::<U1, U0, u8>(mode).map(|v| v.repr()),
+      Ok(below_half),
+      "{mode:?}"
+    );
+  }
+
+  let below: D0x153 = format!("-0.4{}", nines(152)).parse().unwrap();
+  for (mode, expected) in [
+    (Up, -1),
+    (HalfUp, 0),
+    (HalfEven, 0),
+    (Floor, -1),
+    (Ceiling, 0),
+  ] {
+    assert_eq!(
+      below.round_to::<U1, U0, i8>(mode).map(|v| v.repr()),
+      Ok(expected),
+      "{mode:?}"
+    );
+  }
+  let half: D0x153 = "-0.5".parse().unwrap();
+  for (mode, expected) in [(HalfUp, -1), (HalfDown, 0), (HalfEven, 0)] {
+    assert_eq!(
+      half.round_to::<U1, U0, i8>(mode).map(|v| v.repr()),
+      Ok(expected),
+      "{mode:?}"
+    );
+  }
+
+  let tie: Decimal<U1, U20> = format!("1.5{}", zeros(19)).parse().unwrap();
+  let tie_38: D1x38 = "-2.5".parse().unwrap();
+  let above_38: D1x38 = format!("-2.5{}1", zeros(36)).parse().unwrap();
+  for (mode, tie_20, tie_38_expected, above_38_expected) in [
+    (Up, 2, -3, -3),
+    (Down, 1, -2, -2),
+    (Ceiling, 2, -2, -2),
+    (Floor, 1, -3, -3),
+    (HalfUp, 2, -3, -3),
+    (HalfDown, 1, -2, -3),
+    (HalfEven, 2, -2, -3),
+  ] {
+    assert_eq!(
+      tie.round_to::<U1, U0, i8>(mode).map(|v| v.repr()),
+      Ok(tie_20),
+      "{mode:?}"
+    );
+    assert_eq!(
+      tie_38.round_to::<U1, U0, i8>(mode).map(|v| v.repr()),
+      Ok(tie_38_expected),
+      "{mode:?}"
+    );
+    assert_eq!(
+      above_38.round_to::<U1, U0, i8>(mode).map(|v| v.repr()),
+      Ok(above_38_expected),
+      "{mode:?}"
+    );
+  }
+}
+
+#[test]
+fn round_to_examples() {
+  use RoundingMode::{Ceiling, Down, Floor, HalfEven, HalfUp, Up};
+
+  let price: Decimal<U10, U4> = "2.345".parse().unwrap();
+  for (value, mode, expected) in [
+    (price, HalfEven, "2.34"),
+    (price, HalfUp, "2.35"),
+    (price, Down, "2.34"),
+    (price, Up, "2.35"),
+    (price.neg(), HalfEven, "-2.34"),
+    (price.neg(), Floor, "-2.35"),
+    (price.neg(), Ceiling, "-2.34"),
+  ] {
+    let rounded: Decimal<U10, U2> = value.round_to(mode).unwrap();
+    assert_eq!(rounded.to_string(), expected, "{value} {mode:?}");
+  }
+  for (text, expected) in [("1.25", "1.2"), ("1.35", "1.4")] {
+    let value: D2x2 = text.parse().unwrap();
+    let rounded: D1x1 = value.round_to(HalfEven).unwrap();
+    assert_eq!(rounded.to_string(), expected);
+  }
+}
+
+#[test]
+fn round_to_without_dropped_digits_is_try_convert() {
+  for text in ["0", "1.25", "-1.25", "99.99", "-99.99", "0.01"] {
+    let value: D2x2 = text.parse().unwrap();
+    for mode in bigint::MODES {
+      assert_eq!(value.round_to::<U2, U2, i16>(mode), Ok(value));
+      assert_eq!(
+        value.round_to::<U10, U8, i64>(mode),
+        value.try_convert::<U10, U8, i64>()
+      );
+      assert_eq!(
+        value.round_to::<U1, U3, i16>(mode),
+        value.try_convert::<U1, U3, i16>()
+      );
+      assert_eq!(
+        value.round_to::<U2, U2, u16>(mode),
+        value.try_convert::<U2, U2, u16>()
+      );
+      assert_eq!(
+        value.round_to::<U39, U18, i192>(mode),
+        value.try_convert::<U39, U18, i192>()
+      );
+    }
+  }
+}
+
+#[test]
+fn quantize_to_steps() {
+  use RoundingMode::{Ceiling, Down, Floor, HalfDown, HalfEven, HalfUp, Up};
+
+  for (value, step, mode, expected) in [
+    ("12.3456", "1", HalfUp, "12"),
+    ("12.3456", "5", HalfUp, "10"),
+    ("12.3456", "5", Up, "15"),
+    ("12.3456", "0.05", HalfEven, "12.35"),
+    ("12.3456", "0.05", Down, "12.3"),
+    ("12.3456", "0.05", Up, "12.35"),
+    ("12.3456", "0.001", HalfEven, "12.346"),
+    ("12.3455", "0.001", HalfEven, "12.346"),
+    ("12.3465", "0.001", HalfEven, "12.346"),
+    ("12.3456", "0.001", Floor, "12.345"),
+    ("-12.3456", "0.001", Floor, "-12.346"),
+    ("-12.3456", "0.001", Ceiling, "-12.345"),
+    ("-12.3456", "0.05", HalfUp, "-12.35"),
+    ("12.3456", "12.3456", Up, "12.3456"),
+    ("12.3456", "20", Down, "0"),
+    ("12.3456", "20", HalfUp, "20"),
+    ("12.3456", "20", Up, "20"),
+    ("-12.3456", "20", Up, "-20"),
+    ("-12.3456", "20", HalfDown, "-20"),
+    ("9999.9999", "5", Down, "9995"),
+  ] {
+    let (value, step): (D4x4, D4x4) = (value.parse().unwrap(), step.parse().unwrap());
+    assert_eq!(
+      value.quantize(step, mode).map(|v| v.to_string()),
+      Ok(expected.to_string()),
+      "{value} by {step} {mode:?}"
+    );
+    let (wide, wide_step): (D40x40, D40x40) = (value.widen(), step.widen());
+    assert_eq!(
+      wide.quantize(wide_step, mode).map(|v| v.to_string()),
+      Ok(expected.to_string()),
+      "{value} by {step} {mode:?}"
+    );
+  }
+  // A multiple of the step is returned unchanged in every mode.
+  let tick: D4x4 = "0.05".parse().unwrap();
+  for text in ["0", "12.35", "-12.35", "9999.95", "-0.05"] {
+    let value: D4x4 = text.parse().unwrap();
+    for mode in bigint::MODES {
+      assert_eq!(value.quantize(tick, mode), Ok(value), "{text} {mode:?}");
+    }
+  }
+}
+
+/// A zero step has no multiple but zero, so it is rejected, as is a negative step; the result is
+/// never zero for a step that cannot be divided by.
+#[test]
+fn quantize_rejects_steps_that_are_not_positive() {
+  let value: D4x4 = "12.3456".parse().unwrap();
+  for mode in bigint::MODES {
+    for step in [D4x4::ZERO, D4x4::ONE.neg(), D4x4::MIN] {
+      assert_eq!(value.quantize(step, mode), Err(QuantizeError::InvalidStep));
+      assert_eq!(
+        D4x4::ZERO.quantize(step, mode),
+        Err(QuantizeError::InvalidStep)
+      );
+    }
+    assert_eq!(
+      D2x0u8::MAX.quantize(D2x0u8::ZERO, mode),
+      Err(QuantizeError::InvalidStep)
+    );
+    assert_eq!(
+      D153x0::MAX.quantize(D153x0::ZERO, mode),
+      Err(QuantizeError::InvalidStep)
+    );
+    assert_eq!(
+      D153x0::MAX.quantize(D153x0::MIN, mode),
+      Err(QuantizeError::InvalidStep)
+    );
+    assert_eq!(
+      D154x0u512::MAX.quantize(D154x0u512::ZERO, mode),
+      Err(QuantizeError::InvalidStep)
+    );
+    assert_eq!(
+      TokenAmount::ONE.quantize(TokenAmount::ZERO, mode),
+      Err(QuantizeError::InvalidStep)
+    );
+  }
+}
+
+/// Rounding away from zero can overflow the storage or only the decimal range; rounding toward
+/// zero never overflows.
+#[test]
+fn quantize_reports_both_kinds_of_overflow() {
+  use RoundingMode::{Down, Floor, HalfDown, HalfEven, HalfUp, Up};
+
+  // 99 + 98 = 196 overflows an `i8`.
+  let (value, step) = (D2x0::from_repr(99).unwrap(), D2x0::from_repr(98).unwrap());
+  assert_eq!(value.quantize(step, Up), Err(QuantizeError::OutOfRange));
+  assert_eq!(
+    value.neg().quantize(step, Up),
+    Err(QuantizeError::OutOfRange)
+  );
+  assert_eq!(value.quantize(step, Down).map(|v| v.repr()), Ok(98));
+  assert_eq!(value.quantize(step, HalfUp).map(|v| v.repr()), Ok(98));
+  // 90 + 10 = 100 fits an `i8` but not two digits.
+  let (value, step) = (D2x0::from_repr(95).unwrap(), D2x0::from_repr(10).unwrap());
+  for mode in [Up, HalfUp, HalfEven] {
+    assert_eq!(value.quantize(step, mode), Err(QuantizeError::OutOfRange));
+  }
+  assert_eq!(
+    value.neg().quantize(step, Floor),
+    Err(QuantizeError::OutOfRange)
+  );
+  assert_eq!(value.quantize(step, HalfDown).map(|v| v.repr()), Ok(90));
+  // 99 + 98 = 196 fits a `u8` but not two digits.
+  let (value, step) = (
+    D2x0u8::from_repr(99).unwrap(),
+    D2x0u8::from_repr(98).unwrap(),
+  );
+  assert_eq!(value.quantize(step, Up), Err(QuantizeError::OutOfRange));
+  // 2 * (10^19 - 2) overflows a `u64`.
+  let step = D19x0u64::from_repr(MAX_19_U64 - 1).unwrap();
+  assert_eq!(
+    D19x0u64::MAX.quantize(step, Up),
+    Err(QuantizeError::OutOfRange)
+  );
+  assert_eq!(
+    D19x0u64::MAX.quantize(step, HalfUp).map(|v| v.repr()),
+    Ok(MAX_19_U64 - 1)
+  );
+
+  // The wide storages whose largest sums overflow: `u256` with 77 digits, `i320` with 96 and
+  // `u512` with 154.
+  let step = D77x0u256::MAX.checked_sub(D77x0u256::ONE).unwrap();
+  assert_eq!(
+    D77x0u256::MAX.quantize(step, Up),
+    Err(QuantizeError::OutOfRange)
+  );
+  assert_eq!(D77x0u256::MAX.quantize(step, Down), Ok(step));
+  let step = D96x0::MAX.checked_sub(D96x0::ONE).unwrap();
+  assert_eq!(
+    D96x0::MAX.quantize(step, Up),
+    Err(QuantizeError::OutOfRange)
+  );
+  assert_eq!(
+    D96x0::MIN.quantize(step, Up),
+    Err(QuantizeError::OutOfRange)
+  );
+  assert_eq!(D96x0::MIN.quantize(step, Down), Ok(step.neg()));
+  let step = D154x0u512::MAX.checked_sub(D154x0u512::ONE).unwrap();
+  assert_eq!(
+    D154x0u512::MAX.quantize(step, Up),
+    Err(QuantizeError::OutOfRange)
+  );
+  assert_eq!(D154x0u512::MAX.quantize(step, HalfEven), Ok(step));
+}
+
+/// Values and steps of several limbs against rounding by distance.
+#[test]
+fn quantize_with_multi_limb_steps() {
+  fn check(value: D153x0, step: D153x0) {
+    let big = |value: D153x0| bigint::from_limbs(&value.repr().to_limbs(), true);
+    let (big_value, big_step) = (big(value), big(step));
+    for mode in bigint::MODES {
+      let multiple = bigint::round(&big_value, &big_step, mode) * &big_step;
+      let expected = if multiple.magnitude() < bigint::pow10(153).magnitude() {
+        Ok(multiple)
+      } else {
+        Err(QuantizeError::OutOfRange)
+      };
+      assert_eq!(
+        value.quantize(step, mode).map(big),
+        expected,
+        "{value} by {step} {mode:?}"
+      );
+    }
+  }
+
+  let from_big = |value: BigInt| {
+    D153x0::from_repr(i512::from_limbs(bigint::to_limbs(&value, true).unwrap())).unwrap()
+  };
+  let values = [
+    D153x0::MAX,
+    D153x0::MIN,
+    D153x0::ONE,
+    from_big(bigint::pow10(152) * 3u8 + 12_345u32),
+    from_big(-(bigint::pow10(100) * 7u8) - 1u8),
+  ];
+  let steps = [
+    from_big(bigint::pow10(80) + 1u8),
+    from_big(bigint::pow10(40)),
+    from_big(bigint::pow10(100) * 25u8),
+    from_big(bigint::pow10(60) * 3u8 + 7u8),
+    from_big(bigint::pow10(152)),
+    D153x0::MAX,
+  ];
+  for value in values {
+    for step in steps {
+      check(value, step);
+    }
+  }
+}
+
+#[test]
+fn is_multiple_of_steps() {
+  let tick: Price = "0.05".parse().unwrap();
+  let on: Price = "12.35".parse().unwrap();
+  let off: Price = "12.34".parse().unwrap();
+  assert!(on.is_multiple_of(tick) && !off.is_multiple_of(tick));
+  assert!(on.neg().is_multiple_of(tick) && !off.neg().is_multiple_of(tick));
+  // A negative step counts as its magnitude.
+  assert!(on.is_multiple_of(tick.neg()) && !off.is_multiple_of(tick.neg()));
+  // Only zero is a multiple of zero.
+  assert!(Price::ZERO.is_multiple_of(Price::ZERO));
+  assert!(!tick.is_multiple_of(Price::ZERO) && Price::ZERO.is_multiple_of(tick));
+  // Every value is a multiple of the smallest unit, of either sign.
+  let unit = Price::from_repr(1).unwrap();
+  assert!(Price::MAX.is_multiple_of(unit) && Price::MIN.is_multiple_of(unit.neg()));
+  assert!(!unit.is_multiple_of(Price::MAX) && Price::MAX.is_multiple_of(Price::MIN));
+
+  let lot: D10x9u64 = "0.001".parse().unwrap();
+  assert!("5.002".parse::<D10x9u64>().unwrap().is_multiple_of(lot));
+  assert!(!"5.0025".parse::<D10x9u64>().unwrap().is_multiple_of(lot));
+  assert!(!lot.is_multiple_of(D10x9u64::ZERO) && D10x9u64::ZERO.is_multiple_of(D10x9u64::ZERO));
+
+  let gwei: TokenAmount = "0.000000001".parse().unwrap();
+  assert!(
+    TokenAmount::MAX
+      .is_multiple_of(TokenAmount::from_repr(u320::from_limbs([1, 0, 0, 0, 0])).unwrap())
+  );
+  assert!(!TokenAmount::MAX.is_multiple_of(gwei));
+  assert!(
+    "123.000000004"
+      .parse::<TokenAmount>()
+      .unwrap()
+      .is_multiple_of(gwei)
+  );
+  let step = D153x0::MAX.checked_sub(D153x0::ONE).unwrap();
+  assert!(step.neg().is_multiple_of(step) && !D153x0::MAX.is_multiple_of(step));
+  assert!(D153x0::MIN.is_multiple_of(D153x0::MAX));
+}
+
+#[test]
+fn rounding_in_const_context() {
+  const TICK: Price = match Price::from_repr(5_000_000) {
+    Some(tick) => tick,
+    None => panic!("tick out of range"),
+  };
+  const PRICE: Price = match Price::parse("12.3456") {
+    Ok(price) => price,
+    Err(_) => panic!("invalid price"),
+  };
+  const ROUNDED: Result<Price, QuantizeError> = PRICE.quantize(TICK, RoundingMode::HalfEven);
+  const DOWN: Result<Price, QuantizeError> = PRICE.neg().quantize(TICK, RoundingMode::Down);
+  const INVALID: Result<Price, QuantizeError> = PRICE.quantize(Price::ZERO, RoundingMode::Up);
+  const OVERFLOW: Result<Price, QuantizeError> = Price::MAX.quantize(TICK, RoundingMode::Up);
+
+  const GWEI: TokenAmount = match TokenAmount::parse("0.000000001") {
+    Ok(gwei) => gwei,
+    Err(_) => panic!("invalid amount"),
+  };
+  const AMOUNT: TokenAmount = match TokenAmount::parse("1.234567891234567891") {
+    Ok(amount) => amount,
+    Err(_) => panic!("invalid amount"),
+  };
+  const WIDE: Result<TokenAmount, QuantizeError> = AMOUNT.quantize(GWEI, RoundingMode::HalfUp);
+  const ON_STEP: [bool; 3] = [
+    PRICE.is_multiple_of(TICK),
+    TICK.is_multiple_of(TICK),
+    AMOUNT.is_multiple_of(GWEI),
+  ];
+
+  assert_eq!(ROUNDED.map(|v| v.to_string()), Ok("12.35".to_string()));
+  assert_eq!(DOWN.map(|v| v.to_string()), Ok("-12.3".to_string()));
+  assert_eq!(INVALID, Err(QuantizeError::InvalidStep));
+  assert_eq!(OVERFLOW, Err(QuantizeError::OutOfRange));
+  assert_eq!(WIDE.map(|v| v.to_string()), Ok("1.234567891".to_string()));
+  assert_eq!(ON_STEP, [false, true, false]);
+}
+
+#[cfg(feature = "serde")]
+mod with_serde {
+  use serde_test::{Configure, Token, assert_de_tokens, assert_de_tokens_error, assert_tokens};
+  use std::{format, string::ToString};
+
+  use super::{
+    D0x153, D0x154u512, D1x1, D1x1u8, D2x2, D153x0, D154x0u512, Decimal, Price, TokenAmount, U1,
+    U2, nines,
+  };
+  use crate::{RoundingMode, bigint};
+
+  #[test]
+  fn decimals_are_strings_in_every_format() {
+    let price: Price = "-12.5".parse().unwrap();
+    assert_tokens(&price.readable(), &[Token::Str("-12.5")]);
+    assert_tokens(&price.compact(), &[Token::Str("-12.5")]);
+    let amount: TokenAmount = "1.000000000000000001".parse().unwrap();
+    assert_tokens(&amount.readable(), &[Token::Str("1.000000000000000001")]);
+    assert_tokens(&amount.compact(), &[Token::Str("1.000000000000000001")]);
+    assert_tokens(&D1x1u8::MAX.compact(), &[Token::Str("9.9")]);
+    // Borrowed and owned strings read the same text, with the full grammar of `parse`.
+    assert_de_tokens(&price, &[Token::BorrowedStr("-1_25e-1")]);
+    assert_de_tokens(&price, &[Token::String("-12.500")]);
+  }
+
+  #[test]
+  fn decimals_reject_everything_but_strings() {
+    assert_de_tokens_error::<Price>(
+      &[Token::F64(16.7)],
+      "invalid type: floating point `16.7`, expected a decimal number as a string",
+    );
+    assert_de_tokens_error::<Price>(
+      &[Token::I64(167)],
+      "invalid type: integer `167`, expected a decimal number as a string",
+    );
+    assert_de_tokens_error::<Price>(
+      &[Token::Bytes(b"1.5")],
+      "invalid type: byte array, expected a decimal number as a string",
+    );
+    // A string that does not parse reports why.
+    assert_de_tokens_error::<Price>(&[Token::Str("1.5x")], "invalid decimal syntax");
+    assert_de_tokens_error::<D2x2>(
+      &[Token::Str("0.001")],
+      "decimal cannot be represented exactly in the target type",
+    );
+    assert_de_tokens_error::<D1x1u8>(&[Token::Str("-1")], "invalid decimal syntax");
+  }
+
+  #[test]
+  fn json_round_trips() {
+    let price: Price = "64250.5".parse().unwrap();
+    assert_eq!(serde_json::to_string(&price).unwrap(), "\"64250.5\"");
+    assert_eq!(serde_json::from_str::<Price>("\"64250.5\"").unwrap(), price);
+    // The widest texts, 156 bytes each, and the integers with the most digits.
+    assert_eq!(
+      serde_json::to_string(&D0x154u512::MAX).unwrap(),
+      format!("\"0.{}\"", nines(154))
+    );
+    assert_eq!(
+      serde_json::to_string(&D0x153::MIN).unwrap(),
+      format!("\"-0.{}\"", nines(153))
+    );
+    assert_eq!(
+      serde_json::to_string(&D154x0u512::MAX).unwrap(),
+      format!("\"{}\"", nines(154))
+    );
+    assert_eq!(
+      serde_json::to_string(&D153x0::MIN).unwrap(),
+      format!("\"-{}\"", nines(153))
+    );
+    for value in [D0x154u512::MAX, D0x154u512::ZERO] {
+      let json = serde_json::to_string(&value).unwrap();
+      assert_eq!(serde_json::from_str::<D0x154u512>(&json).unwrap(), value);
+    }
+    for value in [D0x153::MIN, D0x153::MAX] {
+      let json = serde_json::to_string(&value).unwrap();
+      assert_eq!(serde_json::from_str::<D0x153>(&json).unwrap(), value);
+    }
+    let json = serde_json::to_string(&D154x0u512::MAX).unwrap();
+    assert_eq!(
+      serde_json::from_str::<D154x0u512>(&json).unwrap(),
+      D154x0u512::MAX
+    );
+    let json = serde_json::to_string(&D153x0::MIN).unwrap();
+    assert_eq!(serde_json::from_str::<D153x0>(&json).unwrap(), D153x0::MIN);
+  }
+
+  /// A JSON number would pass through `f64`, which holds `16.7` only approximately.
+  #[test]
+  fn json_reads_text_exactly_and_rejects_numbers() {
+    type D2x1 = Decimal<U2, U1>;
+    let value: D2x1 = serde_json::from_str("\"16.7\"").unwrap();
+    assert_eq!(value.repr(), 167);
+    let err = serde_json::from_str::<D2x1>("16.7").unwrap_err();
+    assert!(err.is_data(), "{err}");
+    assert!(
+      err
+        .to_string()
+        .starts_with("invalid type: floating point `16.7`"),
+      "{err}"
+    );
+    let err = serde_json::from_str::<D2x1>("16").unwrap_err();
+    assert!(
+      err.to_string().starts_with("invalid type: integer `16`"),
+      "{err}"
+    );
+    let err = serde_json::from_str::<D2x1>("\"16.7.1\"").unwrap_err();
+    assert!(
+      err.to_string().starts_with("invalid decimal syntax"),
+      "{err}"
+    );
+  }
+
+  #[test]
+  fn negative_zero_reads_as_zero() {
+    let zero: D1x1 = serde_json::from_str("\"-0.0\"").unwrap();
+    assert!(zero.is_zero() && !zero.is_negative());
+    assert_eq!(serde_json::to_string(&zero).unwrap(), "\"0\"");
+  }
+
+  #[test]
+  fn rounding_modes_are_their_names() {
+    let names = [
+      "Up", "Down", "Ceiling", "Floor", "HalfUp", "HalfDown", "HalfEven",
+    ];
+    for (mode, name) in bigint::MODES.into_iter().zip(names) {
+      assert_tokens(&mode.readable(), &[Token::Str(name)]);
+      assert_tokens(&mode.compact(), &[Token::Str(name)]);
+      let json = format!("\"{name}\"");
+      assert_eq!(serde_json::to_string(&mode).unwrap(), json);
+      assert_eq!(serde_json::from_str::<RoundingMode>(&json).unwrap(), mode);
+    }
+    assert_de_tokens_error::<RoundingMode>(
+      &[Token::Str("halfEven")],
+      concat!(
+        "unknown variant `halfEven`, expected one of `Up`, `Down`, `Ceiling`, `Floor`, `HalfUp`, ",
+        "`HalfDown`, `HalfEven`",
+      ),
+    );
+    assert_de_tokens_error::<RoundingMode>(
+      &[Token::U8(6)],
+      "invalid type: integer `6`, expected the name of a rounding mode as a string",
+    );
+    let err = serde_json::from_str::<RoundingMode>("6").unwrap_err();
+    assert!(
+      err.to_string().starts_with("invalid type: integer `6`"),
+      "{err}"
+    );
+    let err = serde_json::from_str::<RoundingMode>("\"ROUND_HALF_EVEN\"").unwrap_err();
+    assert!(err.to_string().starts_with("unknown variant"), "{err}");
+  }
 }

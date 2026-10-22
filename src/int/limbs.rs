@@ -8,6 +8,7 @@
 use core::cmp::Ordering;
 
 use super::{DIGIT_BUF_LEN, DigitBuf};
+use crate::rounding::{self, RoundingMode};
 
 /// `10^19`, the largest power of ten in a `u64`.
 const TEN_POW_19: u64 = 10_000_000_000_000_000_000;
@@ -16,7 +17,7 @@ const TEN_POW_19: u64 = 10_000_000_000_000_000_000;
 const MAX_STEP: u32 = 19;
 
 /// One.
-const fn one<const N: usize>() -> [u64; N] {
+pub(crate) const fn one<const N: usize>() -> [u64; N] {
   let mut one = [0; N];
   one[0] = 1;
   one
@@ -245,6 +246,202 @@ pub(crate) const fn div_rem_pow10<const N: usize>(
   let (remainder, borrow) = overflowing_sub(value, mul_pow10(quotient, exp));
   debug_assert!(!borrow, "remainder of a division by a power of ten");
   (quotient, remainder)
+}
+
+/// The dividend of `div_rem` once normalized: `N` limbs, and at index `N` the limb that
+/// normalization shifts out of the top one. It stands for a `[u64; N + 1]`, which stable Rust
+/// cannot name for a generic `N`. The division reduces it to the normalized remainder.
+struct Dividend<const N: usize> {
+  limbs: [u64; N],
+  top: u64,
+}
+
+impl<const N: usize> Dividend<N> {
+  /// The limb at index `i`. Requires `i <= N`.
+  const fn get(&self, i: usize) -> u64 {
+    if i == N { self.top } else { self.limbs[i] }
+  }
+
+  /// Sets the limb at index `i`. Requires `i <= N`.
+  const fn set(&mut self, i: usize, limb: u64) {
+    if i == N {
+      self.top = limb;
+    } else {
+      self.limbs[i] = limb;
+    }
+  }
+}
+
+/// `value << shift` modulo `2^(64N)`, and the bits shifted out of the top limb. Requires
+/// `shift < 64`.
+const fn shl<const N: usize>(value: [u64; N], shift: u32) -> ([u64; N], u64) {
+  // The carry below would shift by 64 bits, which overflows.
+  if shift == 0 {
+    return (value, 0);
+  }
+  let mut shifted = [0; N];
+  let mut carry = 0;
+  let mut i = 0;
+  while i < N {
+    shifted[i] = value[i] << shift | carry;
+    carry = value[i] >> (64 - shift);
+    i += 1;
+  }
+  (shifted, carry)
+}
+
+/// `value >> shift`. Requires `shift < 64`.
+const fn shr<const N: usize>(value: [u64; N], shift: u32) -> [u64; N] {
+  // The bits taken from the next limb below would be shifted by 64 bits, which overflows.
+  if shift == 0 {
+    return value;
+  }
+  let mut shifted = [0; N];
+  let mut i = 0;
+  while i < N {
+    shifted[i] = value[i] >> shift;
+    if i + 1 < N {
+      shifted[i] |= value[i + 1] << (64 - shift);
+    }
+    i += 1;
+  }
+  shifted
+}
+
+/// Quotient and remainder of `lhs / rhs`. Requires `rhs != 0`.
+///
+/// A divisor of one significant limb goes through `div_rem_u64`, and a dividend below the divisor
+/// has the quotient zero. Otherwise this is Algorithm D of Knuth's The Art of Computer
+/// Programming, volume 2, section 4.3.1: both operands are shifted left until the high bit of the
+/// divisor's top limb is set, each quotient limb is estimated from the top limbs of the remaining
+/// dividend and corrected, and the remainder is shifted back.
+pub(crate) const fn div_rem<const N: usize>(lhs: [u64; N], rhs: [u64; N]) -> ([u64; N], [u64; N]) {
+  // The number of significant limbs of the divisor, at least one.
+  let mut n = N;
+  while n > 1 && rhs[n - 1] == 0 {
+    n -= 1;
+  }
+  if n == 1 {
+    // Algorithm D needs two divisor limbs. A zero divisor fails here as native division does.
+    let (quotient, remainder) = div_rem_u64(lhs, rhs[0]);
+    let mut wide = [0; N];
+    wide[0] = remainder;
+    return (quotient, wide);
+  }
+  if matches!(cmp(lhs, rhs), Ordering::Less) {
+    return ([0; N], lhs);
+  }
+
+  // D1: normalize. The shift drops only zero bits of the divisor, while the dividend's top bits
+  // move to an extra limb. With the high bit of the divisor's top limb set, each estimate below
+  // exceeds its quotient limb by at most two.
+  let shift = rhs[n - 1].leading_zeros();
+  let (divisor, lost) = shl(rhs, shift);
+  debug_assert!(lost == 0, "normalization dropped divisor bits");
+  let (limbs, top) = shl(lhs, shift);
+  let mut rem = Dividend { limbs, top };
+  let high = divisor[n - 1] as u128;
+  let next = divisor[n - 2] as u128;
+  let mut quotient = [0; N];
+  // D2: one step per quotient limb, from the most significant down. Step `j` divides the window
+  // `rem[j..=j + n]`, whose top `n` limbs are below the divisor; only the first window reaches
+  // the extra limb, which that step clears.
+  let mut j = N - n + 1;
+  while j > 0 {
+    j -= 1;
+    // D3: estimate the quotient limb from the window's top two limbs, and correct the estimate
+    // with the next divisor limb. The estimate starts at `2^64` or `2^64 + 1` when the window's top
+    // limb equals `high`; that test comes first, so the product is formed only for an estimate
+    // below `2^64`. Once `rest` reaches `2^64`, the product test cannot succeed.
+    let numerator = (rem.get(j + n) as u128) << 64 | rem.get(j + n - 1) as u128;
+    let mut estimate = numerator / high;
+    let mut rest = numerator % high;
+    while estimate >> 64 != 0 || estimate * next > (rest << 64 | rem.get(j + n - 2) as u128) {
+      estimate -= 1;
+      rest += high;
+      if rest >> 64 != 0 {
+        break;
+      }
+    }
+
+    // D4: subtract `estimate * divisor` from the window. The estimate is now below `2^64`.
+    let mut carry: u64 = 0;
+    let mut borrow = false;
+    let mut i = 0;
+    while i < n {
+      // At most `(2^64 - 1)^2 + 2^64 - 1 < 2^128`.
+      let product = estimate * divisor[i] as u128 + carry as u128;
+      carry = (product >> 64) as u64;
+      let (limb, first) = rem.get(j + i).overflowing_sub(product as u64);
+      let (limb, second) = limb.overflowing_sub(borrow as u64);
+      rem.set(j + i, limb);
+      borrow = first || second;
+      i += 1;
+    }
+    let (limb, first) = rem.get(j + n).overflowing_sub(carry);
+    let (limb, second) = limb.overflowing_sub(borrow as u64);
+    rem.set(j + n, limb);
+
+    // D5, D6: a borrow out of the window means that the estimate was one too large, which the
+    // divisor added back corrects. The carry out of the top limb cancels the borrow.
+    if first || second {
+      estimate -= 1;
+      let mut carry = false;
+      let mut i = 0;
+      while i < n {
+        let (limb, first) = rem.get(j + i).overflowing_add(divisor[i]);
+        let (limb, second) = limb.overflowing_add(carry as u64);
+        rem.set(j + i, limb);
+        carry = first || second;
+        i += 1;
+      }
+      rem.set(j + n, rem.get(j + n).wrapping_add(carry as u64));
+    }
+    quotient[j] = estimate as u64;
+  }
+  debug_assert!(rem.top == 0, "the remainder exceeds the divisor");
+  // D8: unnormalize the remainder, which is below the normalized divisor.
+  (quotient, shr(rem.limbs, shift))
+}
+
+/// Returns `true` if `mode` rounds a quotient one step away from zero, given the magnitudes of the
+/// quotient and the remainder of a division rounded toward zero and of the divisor, and whether
+/// the dividend is negative. Requires `remainder < divisor`.
+pub(crate) const fn rounds_away<const N: usize>(
+  quotient: [u64; N],
+  remainder: [u64; N],
+  divisor: [u64; N],
+  negative: bool,
+  mode: RoundingMode,
+) -> bool {
+  // `remainder < divisor`, so nothing borrows.
+  let (rest, _) = overflowing_sub(divisor, remainder);
+  rounding::increments(
+    mode,
+    negative,
+    is_zero(remainder),
+    cmp(remainder, rest),
+    quotient[0] % 2 == 1,
+  )
+}
+
+/// `value / divisor` rounded to an integer with `mode`, the remainder of the division rounded
+/// toward zero, and whether `mode` rounded the quotient away from zero. Requires `divisor != 0`.
+pub(crate) const fn round_div<const N: usize>(
+  value: [u64; N],
+  divisor: [u64; N],
+  mode: RoundingMode,
+) -> ([u64; N], [u64; N], bool) {
+  let (quotient, remainder) = div_rem(value, divisor);
+  let away = rounds_away(quotient, remainder, divisor, false, mode);
+  // Rounding away needs a nonzero remainder, so the divisor is at least 2 and the quotient at most
+  // half of `value`: adding one does not overflow.
+  let rounded = if away {
+    overflowing_add(quotient, one()).0
+  } else {
+    quotient
+  };
+  (rounded, remainder, away)
 }
 
 /// Writes the decimal digits of `value` to the end of `buf`, without leading zeros (zero is a

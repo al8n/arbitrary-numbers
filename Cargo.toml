@@ -14,13 +14,21 @@ path = "benches/foo.rs"
 name = "foo"
 harness = false
 
+[features]
+# Only `serde_core`, without default features: turns on no feature of any other crate in a build.
+serde = ["dep:serde_core"]
+
 [dependencies]
+serde_core = { version = "1", default-features = false, optional = true }
 typenum = { version = "1.20", features = ["const-generics"] }
 
 [dev-dependencies]
+bigdecimal = "0.4"
 criterion = "0.5"
 num-bigint = "0.5"
 proptest = { version = "1", default-features = false, features = ["std"] }
+serde_json = "1"
+serde_test = "1"
 trybuild = "1"
 
 [profile.bench]

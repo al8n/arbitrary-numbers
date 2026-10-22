@@ -29,9 +29,13 @@
 //! ```
 //!
 //! Every operation is exact: it returns the exact result or reports failure, and nothing rounds,
-//! truncates or wraps. Parsing accepts decimal and exponent notation with `_` separators,
-//! including every form that `f64` parses, and rejects infinity, NaN and digits that do not fit;
-//! formatting writes the shortest exact text. See [`Decimal`] for the details.
+//! truncates or wraps unless asked to. Rounding takes an explicit [`RoundingMode`]:
+//! [`round_to`](Decimal::round_to) converts to fewer fraction digits and
+//! [`quantize`](Decimal::quantize) rounds to a multiple of a step, while
+//! [`is_multiple_of`](Decimal::is_multiple_of) checks a value against a step without rounding it.
+//! Parsing accepts decimal and exponent notation with `_` separators, including every form that
+//! `f64` parses, and rejects infinity, NaN and digits that do not fit; formatting writes the
+//! shortest exact text. See [`Decimal`] for the details.
 //!
 //! # Wide storage
 //!
@@ -80,6 +84,22 @@
 //! # `no_std`
 //!
 //! The crate is `no_std` and never allocates.
+//!
+//! # `serde`
+//!
+//! The `serde` feature implements `Serialize` and `Deserialize` for [`Decimal`] and
+//! [`RoundingMode`]. The impls are written against `serde_core`, whose traits `serde` re-exports
+//! from version 1.0.220 on, so they need a build whose `serde` is 1.0.220 or later; an older
+//! `serde` defines traits of its own. The feature enables `serde_core` without its default
+//! features and nothing else, so it turns on no feature in any other crate of a build, and it
+//! needs no allocation.
+//!
+//! A decimal is written as a string, the text that `Display` writes, and read from a string in the
+//! syntax of [`parse`](Decimal::parse), in every format, human-readable or binary. Reading
+//! rejects a number, so a decimal never passes through a binary floating-point value, which would
+//! change `16.7` to the nearest `f64`. Nor is the coefficient written alone: it depends on the
+//! number of fraction digits, and read back into a type with another number it would be off by a
+//! power of ten. A rounding mode is written as the name of its variant, such as `"HalfEven"`.
 #![no_std]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 #![cfg_attr(docsrs, allow(unused_attributes))]
@@ -93,13 +113,17 @@ mod bigint;
 
 pub use typenum;
 
-pub use decimal::{ConvertError, Decimal, ParseError, ParseErrorKind};
+pub use decimal::{ConvertError, Decimal, ParseError, ParseErrorKind, QuantizeError};
 pub use integer::{
   Int, Uint, i192, i256, i320, i384, i448, i512, u192, u256, u320, u384, u448, u512,
 };
 pub use layout::{DigitCount, FitsDigits, Layout, Pick, Storage, Widen, WidenRepr};
+pub use rounding::RoundingMode;
 
 mod decimal;
 mod int;
 mod integer;
 mod layout;
+mod rounding;
+#[cfg(feature = "serde")]
+mod serde;

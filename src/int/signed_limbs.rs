@@ -10,6 +10,7 @@
 use core::cmp::Ordering;
 
 use super::{DigitBuf, limbs};
+use crate::rounding::RoundingMode;
 
 #[inline]
 pub(crate) const fn is_negative<const N: usize>(value: [u64; N]) -> bool {
@@ -203,6 +204,50 @@ pub(crate) const fn div_rem_pow10<const N: usize>(
     from_magnitude(quotient, negative),
     from_magnitude(remainder, negative),
   )
+}
+
+/// Quotient and remainder of `lhs / rhs`, rounding toward zero. As with `/` and `%`, the remainder
+/// has the sign of `lhs`. Requires `rhs != 0`, and `rhs != -1` if `lhs == MIN`.
+pub(crate) const fn div_rem<const N: usize>(lhs: [u64; N], rhs: [u64; N]) -> ([u64; N], [u64; N]) {
+  // The magnitudes are unsigned, which also holds `|MIN|`. The quotient's magnitude is at most
+  // `|lhs|`, and the remainder's below `|rhs|`.
+  let (quotient, remainder) = limbs::div_rem(unsigned_abs(lhs), unsigned_abs(rhs));
+  (
+    from_magnitude(quotient, is_negative(lhs) != is_negative(rhs)),
+    from_magnitude(remainder, is_negative(lhs)),
+  )
+}
+
+/// `value / divisor` rounded to an integer with `mode`, the remainder of the division rounded
+/// toward zero, which has the sign of `value`, and whether `mode` rounded the quotient away from
+/// zero. Requires `divisor > 0`.
+pub(crate) const fn round_div<const N: usize>(
+  value: [u64; N],
+  divisor: [u64; N],
+  mode: RoundingMode,
+) -> ([u64; N], [u64; N], bool) {
+  let (quotient, remainder) = div_rem(value, divisor);
+  // The sign of the value, which the quotient loses when it is zero. A positive divisor is its own
+  // magnitude.
+  let negative = is_negative(value);
+  let away = limbs::rounds_away(
+    unsigned_abs(quotient),
+    unsigned_abs(remainder),
+    divisor,
+    negative,
+    mode,
+  );
+  // Rounding away needs a nonzero remainder, so the divisor is at least 2 and `|quotient|` at most
+  // half of `|value|`: one step further from zero is representable, so the wrapping arithmetic is
+  // exact.
+  let rounded = if !away {
+    quotient
+  } else if negative {
+    limbs::overflowing_sub(quotient, limbs::one()).0
+  } else {
+    limbs::overflowing_add(quotient, limbs::one()).0
+  };
+  (rounded, remainder, away)
 }
 
 /// Writes the decimal digits of `|value|` to the end of `buf`, without leading zeros (zero is a

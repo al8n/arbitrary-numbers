@@ -13,12 +13,14 @@ pub(crate) use sealed::{SealedLayout, SealedStorage, Token};
 use crate::{
   i192, i256, i320, i384, i448, i512,
   int::{self, DigitBuf},
+  rounding::RoundingMode,
   u192, u256, u320, u384, u448, u512,
 };
 
 mod sealed {
   use crate::{
-    i192, i256, i320, i384, i448, i512, int::DigitBuf, u192, u256, u320, u384, u448, u512,
+    i192, i256, i320, i384, i448, i512, int::DigitBuf, rounding::RoundingMode, u192, u256, u320,
+    u384, u448, u512,
   };
 
   /// Taken by every method of [`SealedStorage`] and [`ConvertFrom`]. A bound `R: Storage` makes the
@@ -93,6 +95,9 @@ mod sealed {
     /// Quotient and remainder of `self / 10^exp`, rounding toward zero; both have the sign of
     /// `self`. Requires `10^exp` to be representable.
     fn div_rem_pow10(self, exp: u32, token: Token) -> (Self, Self);
+
+    /// `self / 10^exp` rounded to an integer with `mode`. Requires `10^exp` to be representable.
+    fn round_div_pow10(self, exp: u32, mode: RoundingMode, token: Token) -> Self;
 
     /// Writes the decimal digits of the magnitude to the end of `buf` and returns the index of
     /// the first digit.
@@ -423,6 +428,12 @@ macro_rules! impl_storage {
     #[inline]
     fn div_rem_pow10(self, exp: u32, _: Token) -> (Self, Self) {
       int::$repr::div_rem_pow10(self, exp)
+    }
+
+    #[inline]
+    fn round_div_pow10(self, exp: u32, mode: RoundingMode, _: Token) -> Self {
+      // `10^exp` is positive, as the rounding step requires of the divisor.
+      int::$repr::round_div(self, int::$repr::pow10(exp), mode).0
     }
 
     #[inline]
