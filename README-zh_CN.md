@@ -127,8 +127,7 @@ fn main() -> Result<(), ParseError> {
 
 #### License
 
-`numo` is under the terms of both the MIT license and the
-Apache License (Version 2.0).
+`numo` is dual-licensed under the MIT license or the Apache License (Version 2.0), at your option.
 
 See [LICENSE-APACHE](LICENSE-APACHE), [LICENSE-MIT](LICENSE-MIT) for details.
 
