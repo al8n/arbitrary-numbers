@@ -1,4 +1,4 @@
-use arbitrary_numbers::Storage;
+use numo::Storage;
 
 // A bound `R: Storage` reaches the methods of its sealed supertrait, which take a token that only
 // the crate can make.

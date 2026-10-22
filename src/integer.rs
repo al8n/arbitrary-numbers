@@ -23,7 +23,7 @@ use crate::int::{self, DIGIT_BUF_LEN};
 /// These integers are the wide storages of [`Decimal`](crate::Decimal):
 ///
 /// ```
-/// use arbitrary_numbers::{
+/// use numo::{
 ///   Decimal,
 ///   typenum::{U18, U59},
 ///   u256,
@@ -64,7 +64,7 @@ pub struct Uint<Bits, Repr> {
 /// size, alignment and ABI of `Repr`.
 ///
 /// ```
-/// use arbitrary_numbers::i256;
+/// use numo::i256;
 ///
 /// let minus_one = i256::from_limbs([u64::MAX; 4]);
 /// assert_eq!(minus_one.to_string(), "-1");

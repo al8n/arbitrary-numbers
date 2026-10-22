@@ -7,7 +7,7 @@ error[E0599]: the associated function or constant `ONE` exists for struct `Decim
  ::: $CARGO/typenum-$VERSION/src/uint.rs
   |
   | pub struct UTerm;
-  | ---------------- doesn't satisfy `UTerm: arbitrary_numbers::typenum::NonZero`
+  | ---------------- doesn't satisfy `UTerm: numo::typenum::NonZero`
   |
   = note: the following trait bounds were not satisfied:
-          `UTerm: arbitrary_numbers::typenum::NonZero`
+          `UTerm: numo::typenum::NonZero`

@@ -189,7 +189,7 @@ macro_rules! storage_decimal {
       /// assert_eq!(kind("0.05"), Err(ParseErrorKind::Inexact));
       /// // Out of range and inexact at once.
       /// assert_eq!(kind("10.05"), Err(ParseErrorKind::OutOfRange));
-      /// # Ok::<(), arbitrary_numbers::ParseError>(())
+      /// # Ok::<(), numo::ParseError>(())
       /// ```
       pub const fn parse(s: &str) -> Result<Self, ParseError> {
         let input = s.as_bytes();
@@ -387,7 +387,7 @@ macro_rules! storage_decimal {
       /// assert_eq!(kind("0.05"), Err(ParseErrorKind::Inexact));
       /// // Out of range and inexact at once.
       /// assert_eq!(kind("10.05"), Err(ParseErrorKind::OutOfRange));
-      /// # Ok::<(), arbitrary_numbers::ParseError>(())
+      /// # Ok::<(), numo::ParseError>(())
       /// ```
       pub const fn parse(s: &str) -> Result<Self, ParseError> {
         let input = s.as_bytes();
@@ -424,18 +424,18 @@ macro_rules! storage_decimal {
 
   // The imports of an example, in `rustfmt` order.
   (@use $sign:ident native $repr:ident) => {
-    "use arbitrary_numbers::{Decimal, ParseErrorKind, typenum::U1};"
+    "use numo::{Decimal, ParseErrorKind, typenum::U1};"
   };
   (@use signed wide $repr:ident) => {
     concat!(
-      "use arbitrary_numbers::{Decimal, ParseErrorKind, ",
+      "use numo::{Decimal, ParseErrorKind, ",
       stringify!($repr),
       ", typenum::U1};"
     )
   };
   (@use unsigned wide $repr:ident) => {
     concat!(
-      "use arbitrary_numbers::{Decimal, ParseErrorKind, typenum::U1, ",
+      "use numo::{Decimal, ParseErrorKind, typenum::U1, ",
       stringify!($repr),
       "};"
     )

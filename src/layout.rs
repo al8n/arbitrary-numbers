@@ -239,7 +239,7 @@ pub trait FitsDigits<Repr>: SealedFitsDigits<Repr> {}
 /// compare and hash them; it adds `(I, F): Layout<R>` where it uses the other items:
 ///
 /// ```
-/// use arbitrary_numbers::{
+/// use numo::{
 ///   Decimal, Layout, Storage,
 ///   typenum::{U2, U4},
 /// };

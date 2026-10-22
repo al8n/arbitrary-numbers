@@ -50,7 +50,7 @@ mod tests;
 /// The type has the size, alignment and ABI of `Repr`.
 ///
 /// ```
-/// use arbitrary_numbers::{
+/// use numo::{
 ///   Decimal,
 ///   typenum::{U8, U9, U10, U12, U18, U60},
 ///   u320,
@@ -76,7 +76,7 @@ mod tests;
 /// its constants and constructors fail to compile, so no value of the type can be created.
 ///
 /// ```compile_fail
-/// use arbitrary_numbers::{
+/// use numo::{
 ///   Decimal,
 ///   typenum::{U8, U10},
 /// };
@@ -112,7 +112,7 @@ mod tests;
 /// digits, fits a [`u320`](crate::u320):
 ///
 /// ```
-/// use arbitrary_numbers::{
+/// use numo::{
 ///   Decimal,
 ///   typenum::{U18, U60},
 ///   u320,
@@ -128,14 +128,14 @@ mod tests;
 ///
 /// // The same amount from its decimal digits and an exponent.
 /// assert_eq!("1500000000000000000e-18".parse::<TokenAmount>()?, amount);
-/// # Ok::<(), arbitrary_numbers::ParseError>(())
+/// # Ok::<(), numo::ParseError>(())
 /// ```
 ///
 /// Methods whose behavior depends only on the storage are `const fn`, generated for each storage,
 /// so values can be computed at compile time:
 ///
 /// ```
-/// use arbitrary_numbers::{
+/// use numo::{
 ///   Decimal,
 ///   typenum::{U8, U10},
 /// };
@@ -183,7 +183,7 @@ mod tests;
 /// </div>
 ///
 /// ```
-/// use arbitrary_numbers::{
+/// use numo::{
 ///   Decimal,
 ///   typenum::{U4, U6},
 /// };
@@ -198,7 +198,7 @@ mod tests;
 /// assert_eq!(format!("{amount:>8}"), "   -1.25");
 /// assert_eq!(format!("{amount:08.3}"), "-001.250");
 /// assert_eq!(format!("{:+}", amount.abs()), "+1.25");
-/// # Ok::<(), arbitrary_numbers::ParseError>(())
+/// # Ok::<(), numo::ParseError>(())
 /// ```
 #[repr(transparent)]
 pub struct Decimal<Integral, Fraction, Repr = <Sum<Integral, Fraction> as DigitCount>::Signed> {
@@ -241,7 +241,7 @@ where
   /// [`try_convert`](Self::try_convert) can narrow an operand first.
   ///
   /// ```
-  /// use arbitrary_numbers::{
+  /// use numo::{
   ///   Decimal, i256,
   ///   typenum::{U8, U9, U10, U11, U12, U16, U17, U19, U21, U22, U38},
   /// };
@@ -261,7 +261,7 @@ where
   /// let large: Decimal<U19, U19> = "-1e18".parse()?;
   /// let square: Decimal<U38, U38, i256> = large.exact_mul(large);
   /// assert_eq!(square.to_string(), "1000000000000000000000000000000000000");
-  /// # Ok::<(), arbitrary_numbers::ParseError>(())
+  /// # Ok::<(), numo::ParseError>(())
   /// ```
   #[must_use]
   #[expect(
@@ -310,7 +310,7 @@ where
   /// [`try_convert`](Self::try_convert) instead. An unsigned storage converts to any storage.
   ///
   /// ```
-  /// use arbitrary_numbers::{
+  /// use numo::{
   ///   Decimal,
   ///   typenum::{U2, U4, U8, U10},
   /// };
@@ -322,7 +322,7 @@ where
   /// let unsigned: Decimal<U2, U4, u32> = "12.5".parse()?;
   /// let signed: Decimal<U10, U8> = unsigned.widen();
   /// assert_eq!(signed.repr(), 1_250_000_000);
-  /// # Ok::<(), arbitrary_numbers::ParseError>(())
+  /// # Ok::<(), numo::ParseError>(())
   /// ```
   #[must_use]
   pub fn widen<I2, F2, R2>(self) -> Decimal<I2, F2, R2>
@@ -352,7 +352,7 @@ where
   /// as for `-0.5` with no fraction digits.
   ///
   /// ```
-  /// use arbitrary_numbers::{
+  /// use numo::{
   ///   ConvertError, Decimal,
   ///   typenum::{U0, U2, U3, U4, U10},
   /// };
@@ -382,7 +382,7 @@ where
   ///   precise.try_convert::<U2, U2, i16>(),
   ///   Err(ConvertError::Inexact)
   /// );
-  /// # Ok::<(), arbitrary_numbers::ParseError>(())
+  /// # Ok::<(), numo::ParseError>(())
   /// ```
   pub fn try_convert<I2, F2, R2>(self) -> Result<Decimal<I2, F2, R2>, ConvertError>
   where

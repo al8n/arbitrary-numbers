@@ -13,7 +13,8 @@
 // Miri's 32-bit address space. It still runs natively, and under Miri on the 64-bit targets.
 #![cfg(not(all(miri, target_pointer_width = "32")))]
 
-use arbitrary_numbers::{
+use num_bigint::{BigInt, Sign};
+use numo::{
   ConvertError, Decimal, ParseErrorKind, i192, i256, i320, i384, i448, i512,
   typenum::{
     U0, U1, U2, U3, U4, U5, U6, U7, U8, U9, U10, U11, U12, U14, U16, U17, U18, U19, U20, U22, U26,
@@ -22,7 +23,6 @@ use arbitrary_numbers::{
   },
   u192, u256, u320, u384, u448, u512,
 };
-use num_bigint::{BigInt, Sign};
 use proptest::{prelude::*, test_runner::RngSeed};
 
 fn config() -> ProptestConfig {
