@@ -8,7 +8,7 @@
 //! `Repr`, such as `u64` for up to 19 digits, gives a type whose values are never negative.
 //!
 //! ```
-//! use arbitrary_numbers::{
+//! use numo::{
 //!   Decimal,
 //!   typenum::{U8, U10, U12},
 //! };
@@ -25,7 +25,7 @@
 //!
 //! // Sums are checked against the decimal range, not only the storage range.
 //! assert_eq!(Price::MAX.checked_add(price), None);
-//! # Ok::<(), arbitrary_numbers::ParseError>(())
+//! # Ok::<(), numo::ParseError>(())
 //! ```
 //!
 //! Every operation is exact: it returns the exact result or reports failure, and nothing rounds,
@@ -49,7 +49,7 @@
 //! with an exponent gives the same value:
 //!
 //! ```
-//! use arbitrary_numbers::{
+//! use numo::{
 //!   Decimal,
 //!   typenum::{U18, U60},
 //!   u320,
@@ -64,7 +64,7 @@
 //! let amount = TokenAmount::from_repr(u320::from_limbs([l0, l1, l2, l3, 0])).unwrap();
 //! assert_eq!(amount.to_string(), "18.446744073709551621");
 //! assert_eq!("18446744073709551621e-18".parse::<TokenAmount>()?, amount);
-//! # Ok::<(), arbitrary_numbers::ParseError>(())
+//! # Ok::<(), numo::ParseError>(())
 //! ```
 //!
 //! The wide integers provide only what a storage needs: [`from_limbs`](u256::from_limbs),

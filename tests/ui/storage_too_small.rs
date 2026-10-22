@@ -1,4 +1,4 @@
-use arbitrary_numbers::{
+use numo::{
   Decimal,
   typenum::{U2, U8, U10},
 };

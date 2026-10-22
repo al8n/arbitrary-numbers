@@ -4,9 +4,9 @@ error[E0277]: `widen` cannot reduce the number of integral digits
 7 |   value.widen()
   |         ^^^^^ the target `Integral` is smaller than the source `Integral`
   |
-  = help: the trait `arbitrary_numbers::layout::sealed::IntegralNotReduced` is not implemented for `B0`
+  = help: the trait `numo::layout::sealed::IntegralNotReduced` is not implemented for `B0`
   = note: use `try_convert` for a conversion that can fail
-help: the trait `arbitrary_numbers::layout::sealed::IntegralNotReduced` is implemented for `B1`
+help: the trait `numo::layout::sealed::IntegralNotReduced` is implemented for `B1`
  --> src/layout.rs
   |
   |   impl IntegralNotReduced for typenum::B1 {}
@@ -27,9 +27,9 @@ error[E0277]: `widen` cannot reduce the number of fraction digits
 11 |   value.widen()
    |         ^^^^^ the target `Fraction` is smaller than the source `Fraction`
    |
-   = help: the trait `arbitrary_numbers::layout::sealed::FractionNotReduced` is not implemented for `B0`
+   = help: the trait `numo::layout::sealed::FractionNotReduced` is not implemented for `B0`
    = note: use `try_convert` for a conversion that can fail
-help: the trait `arbitrary_numbers::layout::sealed::FractionNotReduced` is implemented for `B1`
+help: the trait `numo::layout::sealed::FractionNotReduced` is implemented for `B1`
   --> src/layout.rs
    |
    |   impl FractionNotReduced for typenum::B1 {}
