@@ -1,5 +1,6 @@
 //! Helpers for the unit tests that compare with `num-bigint`: conversions between limb arrays and
-//! big integers, the limits and powers of ten that they test, and fewer samples under Miri.
+//! big integers, the limits and powers of ten that they test, and fewer samples and exponents under
+//! Miri.
 
 use num_bigint::{BigInt, Sign};
 use std::vec::Vec;
@@ -56,11 +57,33 @@ pub(crate) fn pow10(exp: u32) -> BigInt {
 
 /// The largest `exp` such that `10^exp <= max`.
 pub(crate) fn max_exp(max: &BigInt) -> u32 {
+  let ten = BigInt::from(10u8);
   let mut exp = 0;
-  while pow10(exp + 1) <= *max {
+  // `10^(exp + 1)`, multiplied up by one factor of ten per step.
+  let mut next = ten.clone();
+  while next <= *max {
     exp += 1;
+    next *= &ten;
   }
   exp
+}
+
+/// The exponents `0..=max_exp` to test, or under Miri only a few of them.
+///
+/// Scaling and division in `int::limbs` step by at most 19 digits (`MAX_STEP`), so the exponents
+/// kept are the edges of one and two steps, plus the top. Under Miri big-integer arithmetic is slow,
+/// and on a 32-bit target every exponent would use up its address space.
+pub(crate) fn exponents(max_exp: u32) -> Vec<u32> {
+  if !cfg!(miri) {
+    return (0..=max_exp).collect();
+  }
+  let mut exps: Vec<u32> = [0, 1, 18, 19, 20, 38, 39, max_exp.saturating_sub(1), max_exp]
+    .into_iter()
+    .filter(|&exp| exp <= max_exp)
+    .collect();
+  exps.sort_unstable();
+  exps.dedup();
+  exps
 }
 
 /// `samples`, or every third of them under Miri, which runs big-integer arithmetic slowly.

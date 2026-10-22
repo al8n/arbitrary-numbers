@@ -9,6 +9,10 @@
 //! an exponent. Each suite covers one decimal type, with a signed or an unsigned storage, native or
 //! wide.
 
+// Under Miri on a 32-bit target, the `num-bigint` and `proptest` allocations of this suite use up
+// Miri's 32-bit address space. It still runs natively, and under Miri on the 64-bit targets.
+#![cfg(not(all(miri, target_pointer_width = "32")))]
+
 use arbitrary_numbers::{
   ConvertError, Decimal, ParseErrorKind, i192, i256, i320, i384, i448, i512,
   typenum::{

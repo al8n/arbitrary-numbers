@@ -315,7 +315,7 @@ macro_rules! wide_tests {
       #[test]
       fn pow10_and_max_magnitude() {
         let max_exp = bigint::max_exp(&max());
-        for exp in 0..=max_exp {
+        for exp in bigint::exponents(max_exp) {
           assert_eq!(big(wide::pow10(exp)), bigint::pow10(exp));
           assert_eq!(big(wide::max_magnitude(exp)), bigint::pow10(exp) - 1u8);
         }
@@ -380,8 +380,8 @@ macro_rules! wide_tests {
 
       #[test]
       fn powers_of_ten() {
-        // Under Miri, only the edges, scaled by every third exponent.
-        let powers: Vec<(u32, BigInt)> = bigint::thin((0..=bigint::max_exp(&max())).collect())
+        // Under Miri, only the edges, scaled by the exponents at the edges of the scaling steps.
+        let powers: Vec<(u32, BigInt)> = bigint::exponents(bigint::max_exp(&max()))
           .into_iter()
           .map(|exp| (exp, bigint::pow10(exp)))
           .collect();
