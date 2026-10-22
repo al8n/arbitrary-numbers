@@ -87,6 +87,10 @@ macro_rules! test_digits {
       [$unsigned:ident $(, $wider_unsigned:ident)*]
   ),+ $(,)?) => {$(
     #[test]
+    #[cfg_attr(
+      all(miri, target_pointer_width = "32"),
+      ignore = "Miri on 32-bit targets runs out of addresses in num-bigint allocations"
+    )]
     fn $digits() {
       type Digits = typenum::consts::$digits;
       assert_eq!(<Digits as Unsigned>::U32, $value);
@@ -123,6 +127,10 @@ digit_table!(test_digits);
 
 /// Only a `u512` holds 154 digits, so the table has no row for them.
 #[test]
+#[cfg_attr(
+  all(miri, target_pointer_width = "32"),
+  ignore = "Miri on 32-bit targets runs out of addresses in num-bigint allocations"
+)]
 fn U154() {
   assert_eq!(<U154 as Unsigned>::U32, 154);
   assert_class(&UNSIGNED, 154, &["u512"]);
@@ -385,6 +393,10 @@ fn assert_conversions<Source: Value, Target: Value>(samples: &[(Source, BigInt)]
 }
 
 #[test]
+#[cfg_attr(
+  all(miri, target_pointer_width = "32"),
+  ignore = "Miri on 32-bit targets runs out of addresses in num-bigint allocations"
+)]
 fn conversions_between_every_pair() {
   macro_rules! assert_pairs {
     ($($source:ident),+ => $targets:tt) => {
