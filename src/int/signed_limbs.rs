@@ -13,23 +13,23 @@ use super::{DigitBuf, limbs};
 use crate::rounding::RoundingMode;
 
 #[inline]
-pub(crate) const fn is_negative<const N: usize>(value: [u64; N]) -> bool {
+pub(crate) const fn is_negative<const N: usize>(value: &[u64; N]) -> bool {
   (value[N - 1] as i64) < 0
 }
 
 #[inline]
-pub(crate) const fn is_zero<const N: usize>(value: [u64; N]) -> bool {
+pub(crate) const fn is_zero<const N: usize>(value: &[u64; N]) -> bool {
   limbs::is_zero(value)
 }
 
 #[inline]
-pub(crate) const fn is_positive<const N: usize>(value: [u64; N]) -> bool {
+pub(crate) const fn is_positive<const N: usize>(value: &[u64; N]) -> bool {
   !is_negative(value) && !is_zero(value)
 }
 
 /// Compares `lhs` and `rhs`: the top limbs as `i64`, then the others as `u64`, most significant
 /// first.
-pub(crate) const fn cmp<const N: usize>(lhs: [u64; N], rhs: [u64; N]) -> Ordering {
+pub(crate) const fn cmp<const N: usize>(lhs: &[u64; N], rhs: &[u64; N]) -> Ordering {
   let lhs_top = lhs[N - 1] as i64;
   let rhs_top = rhs[N - 1] as i64;
   if lhs_top < rhs_top {
@@ -42,15 +42,18 @@ pub(crate) const fn cmp<const N: usize>(lhs: [u64; N], rhs: [u64; N]) -> Orderin
 }
 
 #[inline]
-pub(crate) const fn le<const N: usize>(lhs: [u64; N], rhs: [u64; N]) -> bool {
+pub(crate) const fn le<const N: usize>(lhs: &[u64; N], rhs: &[u64; N]) -> bool {
   !matches!(cmp(lhs, rhs), Ordering::Greater)
 }
 
 /// `lhs + rhs`, or `None` if the sum is not representable.
-pub(crate) const fn checked_add<const N: usize>(lhs: [u64; N], rhs: [u64; N]) -> Option<[u64; N]> {
+pub(crate) const fn checked_add<const N: usize>(
+  lhs: &[u64; N],
+  rhs: &[u64; N],
+) -> Option<[u64; N]> {
   let (sum, _) = limbs::overflowing_add(lhs, rhs);
   // The sum overflows exactly when the operands have the same sign and the wrapped sum the other.
-  if is_negative(lhs) == is_negative(rhs) && is_negative(sum) != is_negative(lhs) {
+  if is_negative(lhs) == is_negative(rhs) && is_negative(&sum) != is_negative(lhs) {
     None
   } else {
     Some(sum)
@@ -58,11 +61,14 @@ pub(crate) const fn checked_add<const N: usize>(lhs: [u64; N], rhs: [u64; N]) ->
 }
 
 /// `lhs - rhs`, or `None` if the difference is not representable.
-pub(crate) const fn checked_sub<const N: usize>(lhs: [u64; N], rhs: [u64; N]) -> Option<[u64; N]> {
+pub(crate) const fn checked_sub<const N: usize>(
+  lhs: &[u64; N],
+  rhs: &[u64; N],
+) -> Option<[u64; N]> {
   let (difference, _) = limbs::overflowing_sub(lhs, rhs);
   // The difference overflows exactly when the operands have different signs and the wrapped
   // difference has the sign of `rhs`.
-  if is_negative(lhs) != is_negative(rhs) && is_negative(difference) != is_negative(lhs) {
+  if is_negative(lhs) != is_negative(rhs) && is_negative(&difference) != is_negative(lhs) {
     None
   } else {
     Some(difference)
@@ -70,7 +76,7 @@ pub(crate) const fn checked_sub<const N: usize>(lhs: [u64; N], rhs: [u64; N]) ->
 }
 
 /// `-value` modulo `2^(64N)`: `!value + 1`, which maps `MIN` to itself.
-const fn wrapping_neg<const N: usize>(value: [u64; N]) -> [u64; N] {
+const fn wrapping_neg<const N: usize>(value: &[u64; N]) -> [u64; N] {
   let mut negated = [0; N];
   let mut carry = true;
   let mut i = 0;
@@ -85,10 +91,10 @@ const fn wrapping_neg<const N: usize>(value: [u64; N]) -> [u64; N] {
 
 /// `-value`. Requires `value != MIN`.
 #[inline]
-pub(crate) const fn neg<const N: usize>(value: [u64; N]) -> [u64; N] {
+pub(crate) const fn neg<const N: usize>(value: &[u64; N]) -> [u64; N] {
   let negated = wrapping_neg(value);
   debug_assert!(
-    limbs::is_zero(value) || is_negative(value) != is_negative(negated),
+    limbs::is_zero(value) || is_negative(value) != is_negative(&negated),
     "negation overflowed"
   );
   negated
@@ -96,40 +102,40 @@ pub(crate) const fn neg<const N: usize>(value: [u64; N]) -> [u64; N] {
 
 /// `|value|`. Requires `value != MIN`.
 #[inline]
-pub(crate) const fn abs<const N: usize>(value: [u64; N]) -> [u64; N] {
+pub(crate) const fn abs<const N: usize>(value: &[u64; N]) -> [u64; N] {
   if is_negative(value) {
     neg(value)
   } else {
-    value
+    *value
   }
 }
 
 /// `|value|` as an unsigned integer, which also holds `|MIN| = 2^(64N - 1)`.
 #[inline]
-pub(crate) const fn unsigned_abs<const N: usize>(value: [u64; N]) -> [u64; N] {
+pub(crate) const fn unsigned_abs<const N: usize>(value: &[u64; N]) -> [u64; N] {
   if is_negative(value) {
     wrapping_neg(value)
   } else {
-    value
+    *value
   }
 }
 
 /// The value with the magnitude `magnitude`, negated if `negative`, or `None` if it is not
 /// representable.
 const fn checked_from_magnitude<const N: usize>(
-  magnitude: [u64; N],
+  magnitude: &[u64; N],
   negative: bool,
 ) -> Option<[u64; N]> {
   if !negative {
     return if is_negative(magnitude) {
       None
     } else {
-      Some(magnitude)
+      Some(*magnitude)
     };
   }
   // A magnitude from 1 to `2^(64N - 1)` negates to a value with the sign bit set.
   let negated = wrapping_neg(magnitude);
-  if limbs::is_zero(magnitude) || is_negative(negated) {
+  if limbs::is_zero(magnitude) || is_negative(&negated) {
     Some(negated)
   } else {
     None
@@ -139,7 +145,7 @@ const fn checked_from_magnitude<const N: usize>(
 /// The value with the magnitude `magnitude`, negated if `negative`. Requires it to be
 /// representable.
 #[inline]
-const fn from_magnitude<const N: usize>(magnitude: [u64; N], negative: bool) -> [u64; N] {
+const fn from_magnitude<const N: usize>(magnitude: &[u64; N], negative: bool) -> [u64; N] {
   debug_assert!(
     checked_from_magnitude(magnitude, negative).is_some(),
     "signed result overflowed"
@@ -147,46 +153,46 @@ const fn from_magnitude<const N: usize>(magnitude: [u64; N], negative: bool) -> 
   if negative {
     wrapping_neg(magnitude)
   } else {
-    magnitude
+    *magnitude
   }
 }
 
 /// `10^exp`. Requires `10^exp` to be representable.
 #[inline]
 pub(crate) const fn pow10<const N: usize>(exp: u32) -> [u64; N] {
-  from_magnitude(limbs::pow10(exp), false)
+  from_magnitude(&limbs::pow10(exp), false)
 }
 
 /// `10^digits - 1`, the largest magnitude with `digits` decimal digits. Requires `10^digits` to be
 /// representable.
 #[inline]
 pub(crate) const fn max_magnitude<const N: usize>(digits: u32) -> [u64; N] {
-  from_magnitude(limbs::max_magnitude(digits), false)
+  from_magnitude(&limbs::max_magnitude(digits), false)
 }
 
 /// `lhs * rhs`. Requires the product to be representable.
 #[inline]
-pub(crate) const fn mul<const N: usize>(lhs: [u64; N], rhs: [u64; N]) -> [u64; N] {
-  let magnitude = limbs::mul(unsigned_abs(lhs), unsigned_abs(rhs));
-  from_magnitude(magnitude, is_negative(lhs) != is_negative(rhs))
+pub(crate) const fn mul<const N: usize>(lhs: &[u64; N], rhs: &[u64; N]) -> [u64; N] {
+  let magnitude = limbs::mul(&unsigned_abs(lhs), &unsigned_abs(rhs));
+  from_magnitude(&magnitude, is_negative(lhs) != is_negative(rhs))
 }
 
 /// `value * 10^exp`. Requires the product to be representable.
 #[inline]
-pub(crate) const fn mul_pow10<const N: usize>(value: [u64; N], exp: u32) -> [u64; N] {
+pub(crate) const fn mul_pow10<const N: usize>(value: &[u64; N], exp: u32) -> [u64; N] {
   from_magnitude(
-    limbs::mul_pow10(unsigned_abs(value), exp),
+    &limbs::mul_pow10(&unsigned_abs(value), exp),
     is_negative(value),
   )
 }
 
 /// `value * 10^exp`, or `None` if the product is not representable.
 pub(crate) const fn checked_mul_pow10<const N: usize>(
-  value: [u64; N],
+  value: &[u64; N],
   exp: u32,
 ) -> Option<[u64; N]> {
-  match limbs::checked_mul_pow10(unsigned_abs(value), exp) {
-    Some(magnitude) => checked_from_magnitude(magnitude, is_negative(value)),
+  match limbs::checked_mul_pow10(&unsigned_abs(value), exp) {
+    Some(magnitude) => checked_from_magnitude(&magnitude, is_negative(value)),
     None => None,
   }
 }
@@ -194,27 +200,30 @@ pub(crate) const fn checked_mul_pow10<const N: usize>(
 /// Quotient and remainder of `value / 10^exp`, rounding toward zero. As with `/` and `%`, both
 /// have the sign of `value`.
 pub(crate) const fn div_rem_pow10<const N: usize>(
-  value: [u64; N],
+  value: &[u64; N],
   exp: u32,
 ) -> ([u64; N], [u64; N]) {
-  let (quotient, remainder) = limbs::div_rem_pow10(unsigned_abs(value), exp);
+  let (quotient, remainder) = limbs::div_rem_pow10(&unsigned_abs(value), exp);
   // Both magnitudes are at most `|value|`, so each is exact with the sign of `value`.
   let negative = is_negative(value);
   (
-    from_magnitude(quotient, negative),
-    from_magnitude(remainder, negative),
+    from_magnitude(&quotient, negative),
+    from_magnitude(&remainder, negative),
   )
 }
 
 /// Quotient and remainder of `lhs / rhs`, rounding toward zero. As with `/` and `%`, the remainder
 /// has the sign of `lhs`. Requires `rhs != 0`, and `rhs != -1` if `lhs == MIN`.
-pub(crate) const fn div_rem<const N: usize>(lhs: [u64; N], rhs: [u64; N]) -> ([u64; N], [u64; N]) {
+pub(crate) const fn div_rem<const N: usize>(
+  lhs: &[u64; N],
+  rhs: &[u64; N],
+) -> ([u64; N], [u64; N]) {
   // The magnitudes are unsigned, which also holds `|MIN|`. The quotient's magnitude is at most
   // `|lhs|`, and the remainder's below `|rhs|`.
-  let (quotient, remainder) = limbs::div_rem(unsigned_abs(lhs), unsigned_abs(rhs));
+  let (quotient, remainder) = limbs::div_rem(&unsigned_abs(lhs), &unsigned_abs(rhs));
   (
-    from_magnitude(quotient, is_negative(lhs) != is_negative(rhs)),
-    from_magnitude(remainder, is_negative(lhs)),
+    from_magnitude(&quotient, is_negative(lhs) != is_negative(rhs)),
+    from_magnitude(&remainder, is_negative(lhs)),
   )
 }
 
@@ -222,8 +231,8 @@ pub(crate) const fn div_rem<const N: usize>(lhs: [u64; N], rhs: [u64; N]) -> ([u
 /// toward zero, which has the sign of `value`, and whether `mode` rounded the quotient away from
 /// zero. Requires `divisor > 0`.
 pub(crate) const fn round_div<const N: usize>(
-  value: [u64; N],
-  divisor: [u64; N],
+  value: &[u64; N],
+  divisor: &[u64; N],
   mode: RoundingMode,
 ) -> ([u64; N], [u64; N], bool) {
   let (quotient, remainder) = div_rem(value, divisor);
@@ -231,8 +240,8 @@ pub(crate) const fn round_div<const N: usize>(
   // magnitude.
   let negative = is_negative(value);
   let away = limbs::rounds_away(
-    unsigned_abs(quotient),
-    unsigned_abs(remainder),
+    &unsigned_abs(&quotient),
+    &unsigned_abs(&remainder),
     divisor,
     negative,
     mode,
@@ -243,9 +252,9 @@ pub(crate) const fn round_div<const N: usize>(
   let rounded = if !away {
     quotient
   } else if negative {
-    limbs::overflowing_sub(quotient, limbs::one()).0
+    limbs::overflowing_sub(&quotient, &limbs::one()).0
   } else {
-    limbs::overflowing_add(quotient, limbs::one()).0
+    limbs::overflowing_add(&quotient, &limbs::one()).0
   };
   (rounded, remainder, away)
 }
@@ -254,8 +263,8 @@ pub(crate) const fn round_div<const N: usize>(
 /// single `0`), and returns the index of the first digit. Requires `|value|` to have at most
 /// `DIGIT_BUF_LEN` digits, which holds for `N <= 8`.
 #[inline]
-pub(crate) const fn write_digits<const N: usize>(value: [u64; N], buf: &mut DigitBuf) -> usize {
-  limbs::write_digits(unsigned_abs(value), buf)
+pub(crate) const fn write_digits<const N: usize>(value: &[u64; N], buf: &mut DigitBuf) -> usize {
+  limbs::write_digits(&unsigned_abs(value), buf)
 }
 
 /// Appends the ASCII digits in `bytes[start..end]` to `value`, computing `value * 10 + d` for each
@@ -263,16 +272,16 @@ pub(crate) const fn write_digits<const N: usize>(value: [u64; N], buf: &mut Digi
 /// not to be negative and a representable result.
 #[inline]
 pub(crate) const fn push_digits<const N: usize>(
-  value: [u64; N],
+  value: &[u64; N],
   bytes: &[u8],
   start: usize,
   end: usize,
 ) -> [u64; N] {
-  from_magnitude(limbs::push_digits(value, bytes, start, end), false)
+  from_magnitude(&limbs::push_digits(value, bytes, start, end), false)
 }
 
 /// Sign-extends or truncates `value` to `M` limbs.
-pub(crate) const fn resize<const N: usize, const M: usize>(value: [u64; N]) -> [u64; M] {
+pub(crate) const fn resize<const N: usize, const M: usize>(value: &[u64; N]) -> [u64; M] {
   let fill = if is_negative(value) { u64::MAX } else { 0 };
   let mut resized = [fill; M];
   let mut i = 0;
@@ -285,12 +294,12 @@ pub(crate) const fn resize<const N: usize, const M: usize>(value: [u64; N]) -> [
 
 /// `value` in `M` limbs, or `None` if it is not representable in `M` limbs.
 pub(crate) const fn checked_resize<const N: usize, const M: usize>(
-  value: [u64; N],
+  value: &[u64; N],
 ) -> Option<[u64; M]> {
   let resized = resize::<N, M>(value);
   // Sign-extending back restores every limb exactly when truncation dropped only copies of the
   // sign bit that remains.
-  if limbs::eq(resize::<M, N>(resized), value) {
+  if limbs::eq(&resize::<M, N>(&resized), value) {
     Some(resized)
   } else {
     None
@@ -300,17 +309,17 @@ pub(crate) const fn checked_resize<const N: usize, const M: usize>(
 /// The unsigned integer `value` in `M` limbs of two's complement, or `None` if it is not
 /// representable.
 pub(crate) const fn checked_from_unsigned<const N: usize, const M: usize>(
-  value: [u64; N],
+  value: &[u64; N],
 ) -> Option<[u64; M]> {
   match limbs::checked_resize::<N, M>(value) {
-    Some(resized) if !is_negative(resized) => Some(resized),
+    Some(resized) if !is_negative(&resized) => Some(resized),
     _ => None,
   }
 }
 
 /// `value` as an unsigned integer of `M` limbs, or `None` if it is negative or does not fit.
 pub(crate) const fn checked_to_unsigned<const N: usize, const M: usize>(
-  value: [u64; N],
+  value: &[u64; N],
 ) -> Option<[u64; M]> {
   if is_negative(value) {
     None

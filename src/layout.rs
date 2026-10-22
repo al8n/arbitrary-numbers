@@ -498,13 +498,13 @@ macro_rules! impl_convert {
     impl ConvertFrom<$source> for $target {
       #[inline]
       fn convert_from(value: $source, _: Token) -> Self {
-        int::$target::from_limbs(impl_convert!(@resize $source_sign int::$source::to_limbs(value)))
+        int::$target::from_limbs(impl_convert!(@resize $source_sign &int::$source::to_limbs(value)))
       }
 
       #[inline]
       fn checked_convert_from(value: $source, _: Token) -> Option<Self> {
         let limbs = int::$source::to_limbs(value);
-        match impl_convert!(@checked_resize $source_sign $target_sign limbs) {
+        match impl_convert!(@checked_resize $source_sign $target_sign &limbs) {
           Some(limbs) => int::$target::checked_from_limbs(limbs),
           None => None,
         }

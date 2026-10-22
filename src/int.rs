@@ -379,19 +379,19 @@ macro_rules! wide {
 
       #[inline]
       pub(crate) const fn is_negative(value: $int) -> bool {
-        signed_limbs::is_negative(value.to_limbs())
+        signed_limbs::is_negative(value.as_limbs())
       }
 
       /// `-value`. Requires `value != MIN`.
       #[inline]
       pub(crate) const fn neg(value: $int) -> $int {
-        $int::from_limbs(signed_limbs::neg(value.to_limbs()))
+        $int::from_limbs(signed_limbs::neg(value.as_limbs()))
       }
 
       /// `|value|`. Requires `value != MIN`.
       #[inline]
       pub(crate) const fn abs(value: $int) -> $int {
-        $int::from_limbs(signed_limbs::abs(value.to_limbs()))
+        $int::from_limbs(signed_limbs::abs(value.as_limbs()))
       }
     }
   };
@@ -400,27 +400,27 @@ macro_rules! wide {
 
     #[inline]
     pub(crate) const fn is_zero(value: $ty) -> bool {
-      $layer::is_zero(value.to_limbs())
+      $layer::is_zero(value.as_limbs())
     }
 
     #[inline]
     pub(crate) const fn is_positive(value: $ty) -> bool {
-      $layer::is_positive(value.to_limbs())
+      $layer::is_positive(value.as_limbs())
     }
 
     #[inline]
     pub(crate) const fn cmp(lhs: $ty, rhs: $ty) -> core::cmp::Ordering {
-      $layer::cmp(lhs.to_limbs(), rhs.to_limbs())
+      $layer::cmp(lhs.as_limbs(), rhs.as_limbs())
     }
 
     #[inline]
     pub(crate) const fn le(lhs: $ty, rhs: $ty) -> bool {
-      $layer::le(lhs.to_limbs(), rhs.to_limbs())
+      $layer::le(lhs.as_limbs(), rhs.as_limbs())
     }
 
     #[inline]
     pub(crate) const fn checked_add(lhs: $ty, rhs: $ty) -> Option<$ty> {
-      match $layer::checked_add(lhs.to_limbs(), rhs.to_limbs()) {
+      match $layer::checked_add(lhs.as_limbs(), rhs.as_limbs()) {
         Some(sum) => Some($ty::from_limbs(sum)),
         None => None,
       }
@@ -428,7 +428,7 @@ macro_rules! wide {
 
     #[inline]
     pub(crate) const fn checked_sub(lhs: $ty, rhs: $ty) -> Option<$ty> {
-      match $layer::checked_sub(lhs.to_limbs(), rhs.to_limbs()) {
+      match $layer::checked_sub(lhs.as_limbs(), rhs.as_limbs()) {
         Some(difference) => Some($ty::from_limbs(difference)),
         None => None,
       }
@@ -437,7 +437,7 @@ macro_rules! wide {
     /// `lhs * rhs`. Requires the product to be representable.
     #[inline]
     pub(crate) const fn mul(lhs: $ty, rhs: $ty) -> $ty {
-      $ty::from_limbs($layer::mul(lhs.to_limbs(), rhs.to_limbs()))
+      $ty::from_limbs($layer::mul(lhs.as_limbs(), rhs.as_limbs()))
     }
 
     /// `10^exp`. Requires `10^exp` to be representable.
@@ -456,13 +456,13 @@ macro_rules! wide {
     /// `value * 10^exp`. Requires the product to be representable.
     #[inline]
     pub(crate) const fn mul_pow10(value: $ty, exp: u32) -> $ty {
-      $ty::from_limbs($layer::mul_pow10(value.to_limbs(), exp))
+      $ty::from_limbs($layer::mul_pow10(value.as_limbs(), exp))
     }
 
     /// `value * 10^exp`, or `None` if the product is not representable.
     #[inline]
     pub(crate) const fn checked_mul_pow10(value: $ty, exp: u32) -> Option<$ty> {
-      match $layer::checked_mul_pow10(value.to_limbs(), exp) {
+      match $layer::checked_mul_pow10(value.as_limbs(), exp) {
         Some(product) => Some($ty::from_limbs(product)),
         None => None,
       }
@@ -472,7 +472,7 @@ macro_rules! wide {
     /// `/` and `%`, both have the sign of `value`.
     #[inline]
     pub(crate) const fn div_rem_pow10(value: $ty, exp: u32) -> ($ty, $ty) {
-      let (quotient, remainder) = $layer::div_rem_pow10(value.to_limbs(), exp);
+      let (quotient, remainder) = $layer::div_rem_pow10(value.as_limbs(), exp);
       ($ty::from_limbs(quotient), $ty::from_limbs(remainder))
     }
 
@@ -481,7 +481,7 @@ macro_rules! wide {
     /// not `lhs == MIN` with `rhs == -1`.
     #[inline]
     pub(crate) const fn div_rem(lhs: $ty, rhs: $ty) -> ($ty, $ty) {
-      let (quotient, remainder) = $layer::div_rem(lhs.to_limbs(), rhs.to_limbs());
+      let (quotient, remainder) = $layer::div_rem(lhs.as_limbs(), rhs.as_limbs());
       ($ty::from_limbs(quotient), $ty::from_limbs(remainder))
     }
 
@@ -495,7 +495,7 @@ macro_rules! wide {
       mode: RoundingMode,
     ) -> ($ty, $ty, bool) {
       let (rounded, remainder, away) =
-        $layer::round_div(value.to_limbs(), divisor.to_limbs(), mode);
+        $layer::round_div(value.as_limbs(), divisor.as_limbs(), mode);
       ($ty::from_limbs(rounded), $ty::from_limbs(remainder), away)
     }
 
@@ -503,7 +503,7 @@ macro_rules! wide {
     /// zeros (zero is a single `0`), and returns the index of the first digit.
     #[inline]
     pub(crate) const fn write_digits(value: $ty, buf: &mut DigitBuf) -> usize {
-      $layer::write_digits(value.to_limbs(), buf)
+      $layer::write_digits(value.as_limbs(), buf)
     }
 
     /// Appends the ASCII digits in `bytes[start..end]` to `value`, computing `value * 10 + d` for
@@ -511,7 +511,7 @@ macro_rules! wide {
     /// `value` not to be negative and a representable result.
     #[inline]
     pub(crate) const fn push_digits(value: $ty, bytes: &[u8], start: usize, end: usize) -> $ty {
-      $ty::from_limbs($layer::push_digits(value.to_limbs(), bytes, start, end))
+      $ty::from_limbs($layer::push_digits(value.as_limbs(), bytes, start, end))
     }
 
     #[inline]
