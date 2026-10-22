@@ -1,0 +1,34 @@
+//! Compile-failure diagnostics, compared against the `.stderr` snapshot next to each case.
+//!
+//! Compiler diagnostics change between releases, and nightly compilers change them first, so the
+//! snapshots are compared only on stable compilers. On nightly, beta and development compilers
+//! the test checks nothing and passes.
+//!
+//! Regenerate the snapshots with `TRYBUILD=overwrite cargo +stable test --test ui` after reviewing
+//! a change in the compiler output.
+
+use std::process::Command;
+
+#[test]
+#[cfg_attr(miri, ignore)]
+fn ui() {
+  if stable_compiler() {
+    trybuild::TestCases::new().compile_fail("tests/ui/*.rs");
+  }
+}
+
+/// Returns `true` if `rustc --version` reports a stable release, not a nightly, beta or
+/// development build.
+fn stable_compiler() -> bool {
+  let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
+  match Command::new(rustc).arg("--version").output() {
+    Ok(output) if output.status.success() => {
+      let version = String::from_utf8_lossy(&output.stdout);
+      version.starts_with("rustc ")
+        && !["-nightly", "-beta", "-dev"]
+          .iter()
+          .any(|channel| version.contains(channel))
+    }
+    _ => false,
+  }
+}
