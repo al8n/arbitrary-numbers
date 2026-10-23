@@ -5,17 +5,18 @@ use core::{
   fmt,
   hash::{Hash, Hasher},
   marker::PhantomData,
-  ops::{Add, BitAnd},
+  ops::{Add, BitAnd, Sub},
 };
 
-use typenum::{And, Sum};
+use typenum::{And, Diff, Max, Maximum, Sum};
 
-pub use error::{ConvertError, ParseError, ParseErrorKind, QuantizeError};
+pub use error::{ConvertError, DivideError, ParseError, ParseErrorKind, QuantizeError};
 
 use crate::{
   int,
   layout::{
-    DigitCount, Layout, Pick, SealedLayout, SealedStorage, Storage, Token, Widen, WidenRepr,
+    DigitCount, DivIntermediate, Layout, Pick, SealedLayout, SealedStorage, Storage, Token, Widen,
+    WidenRepr,
   },
   rounding::RoundingMode,
 };
@@ -96,16 +97,18 @@ mod tests;
 ///
 /// Every operation is exact: it returns the exact result or reports failure, and nothing rounds,
 /// truncates or wraps unless asked to. The operators `+`, `-`, `*` and `/` are not implemented;
-/// use [`checked_add`](Self::checked_add), [`checked_sub`](Self::checked_sub) and
-/// [`exact_mul`](Self::exact_mul). With a signed `Repr`, negation always succeeds because the
-/// range is symmetric, so [`Neg`](core::ops::Neg) is implemented, along with
-/// [`neg`](Self::neg), [`abs`](Self::abs) and [`is_negative`](Self::is_negative). An unsigned
-/// `Repr` has none of them, and its `checked_sub` returns `None` below zero.
+/// use [`checked_add`](Self::checked_add), [`checked_sub`](Self::checked_sub),
+/// [`exact_mul`](Self::exact_mul) and [`div_round`](Self::div_round). With a signed `Repr`,
+/// negation always succeeds because the range is symmetric, so [`Neg`](core::ops::Neg) is
+/// implemented, along with [`neg`](Self::neg), [`abs`](Self::abs) and
+/// [`is_negative`](Self::is_negative). An unsigned `Repr` has none of them, and its `checked_sub`
+/// returns `None` below zero.
 ///
 /// Rounding happens only with an explicit [`RoundingMode`]: [`round_to`](Self::round_to) converts
-/// to a type with fewer fraction digits, and [`quantize`](Self::quantize) rounds to a multiple of a
-/// step, such as a price to a tick size. [`is_multiple_of`](Self::is_multiple_of) checks a value
-/// against a step without rounding it.
+/// to a type with fewer fraction digits, [`div_round`](Self::div_round) divides and rounds the
+/// quotient to a type of the caller's choice, and [`quantize`](Self::quantize) rounds to a
+/// multiple of a step, such as a price to a tick size. [`is_multiple_of`](Self::is_multiple_of)
+/// checks a value against a step without rounding it.
 ///
 /// Conversions keep track of the sign. [`exact_mul`](Self::exact_mul) stores the product of two
 /// unsigned storages in an unsigned storage and any other product in a signed one;
@@ -510,6 +513,147 @@ where
         Ok(Decimal::from_coeff(coeff))
       }
       _ => Err(ConvertError::OutOfRange),
+    }
+  }
+
+  /// Divides by `rhs`, rounding the quotient with `mode` to the fraction digits of any decimal
+  /// type.
+  ///
+  /// The target type `Decimal<I3, F3, R3>` is chosen by inference or with a turbofish, whose first
+  /// parameters are the target's, as in `a.div_round::<U12, U8, i128, _, _, _>(b, mode)`. The exact
+  /// quotient is rounded once, to `F3` fraction digits, as [`RoundingMode`] describes, so the
+  /// result is never inexact. A negative quotient that rounds to zero gives zero, which has no
+  /// sign. [`Down`](RoundingMode::Down) rounds toward zero, which for a negative quotient differs
+  /// from [`Floor`](RoundingMode::Floor), and with [`HalfEven`](RoundingMode::HalfEven) a tie goes
+  /// to the quotient whose last digit is even.
+  ///
+  /// The division is exact up to the rounding. It is computed in an intermediate storage, after
+  /// multiplying the dividend by `10^(F3 + F2 - Fraction)` or, when that exponent would be
+  /// negative, the divisor by `10^(Fraction - F2 - F3)`, so the intermediate has
+  /// `max(Integral + max(Fraction, F2 + F3), I2 + max(F2 + F3, Fraction) - F3)` digits. It is the
+  /// [`DivIntermediate`] storage for those digits, unsigned only if both operand storages are, and
+  /// it can be wider than both operands, as in the last example below. An intermediate of more than
+  /// 153 digits fails to compile; 154 is allowed only when both storages are unsigned.
+  ///
+  /// To round a quotient to a step, such as a quantity to a lot size, [`quantize`](Self::quantize)
+  /// it afterwards. `quantize` takes a step of the quotient's type, so
+  /// [`try_convert`](Self::try_convert) a step of another type first. A directed mode, `Down`,
+  /// `Up`, `Floor` or `Ceiling`, followed by `quantize` in the same mode gives the exact quotient
+  /// quantized, because the step is a multiple of `10^-F3`; the half modes can round twice.
+  ///
+  /// # Errors
+  ///
+  /// Returns [`DivideError::DivisionByZero`] if `rhs` is zero, which is checked first. Otherwise
+  /// returns [`DivideError::OutOfRange`] if the rounded quotient is outside the range of the target
+  /// type: if its integral part has more than `I3` digits, or if it is negative and `R3` is
+  /// unsigned, which a quotient that rounds to zero is not.
+  ///
+  /// ```
+  /// use numo::{
+  ///   Decimal, DivideError, RoundingMode,
+  ///   typenum::{U0, U1, U2, U4, U8, U10, U12, U19, U20},
+  /// };
+  ///
+  /// // The quantity that a budget buys at a price, rounded down to the quantity's fraction digits.
+  /// let budget: Decimal<U12, U2> = "1000".parse()?;
+  /// let price: Decimal<U10, U8> = "64250.5".parse()?;
+  /// let quantity: Decimal<U12, U8> = budget.div_round(price, RoundingMode::Down)?;
+  /// assert_eq!(quantity.to_string(), "0.01556408");
+  /// let up = budget.div_round::<U12, U8, i128, _, _, _>(price, RoundingMode::Up)?;
+  /// assert_eq!(up.to_string(), "0.01556409");
+  ///
+  /// // Then down to a lot size, converted to the quantity's type first.
+  /// let lot: Decimal<U1, U4> = "0.0001".parse()?;
+  /// let lots = quantity.quantize(lot.try_convert()?, RoundingMode::Down)?;
+  /// assert_eq!(lots.to_string(), "0.0155");
+  ///
+  /// // A negative quotient goes into an unsigned storage only if it rounds to zero.
+  /// let change: Decimal<U2, U2> = "-0.1".parse()?;
+  /// let four: Decimal<U1, U0> = "4".parse()?;
+  /// let zero: Decimal<U1, U1, u8> = change.div_round(four, RoundingMode::HalfUp)?;
+  /// assert!(zero.is_zero());
+  /// assert_eq!(
+  ///   change.div_round::<U1, U1, u8, _, _, _>(four, RoundingMode::Floor),
+  ///   Err(DivideError::OutOfRange)
+  /// );
+  ///
+  /// // Division by zero is an error, never zero.
+  /// assert_eq!(
+  ///   budget.div_round::<U12, U8, i128, _, _, _>(Decimal::<U10, U8>::ZERO, RoundingMode::Down),
+  ///   Err(DivideError::DivisionByZero)
+  /// );
+  ///
+  /// // A quotient with more integral digits than the target holds.
+  /// let tick: Decimal<U10, U8> = "0.00000001".parse()?;
+  /// assert_eq!(
+  ///   budget.div_round::<U10, U8, i64, _, _, _>(tick, RoundingMode::Down),
+  ///   Err(DivideError::OutOfRange)
+  /// );
+  ///
+  /// // Two 38-digit native operands, whose intermediate has 39 digits in an `i192`.
+  /// let divisor: Decimal<U1, U1> = "0.7".parse()?;
+  /// let quotient: Decimal<U20, U19> =
+  ///   Decimal::<U19, U19>::MAX.div_round(divisor, RoundingMode::HalfEven)?;
+  /// assert_eq!(quotient.to_string(), "14285714285714285714.2857142857142857141");
+  /// # Ok::<(), Box<dyn core::error::Error>>(())
+  /// ```
+  #[must_use = "this returns the rounded quotient, without modifying the original"]
+  pub fn div_round<I3, F3, R3, I2, F2, R2>(
+    self,
+    rhs: Decimal<I2, F2, R2>,
+    mode: RoundingMode,
+  ) -> Result<Decimal<I3, F3, R3>, DivideError>
+  where
+    R2: Storage,
+    (I2, F2): Layout<R2>,
+    R3: Storage,
+    (I3, F3): Layout<R3>,
+    F2: Add<F3>,
+    Sum<F2, F3>: Max<F>,
+    I: Add<Maximum<Sum<F2, F3>, F>>,
+    Maximum<Sum<F2, F3>, F>: Sub<F3>,
+    I2: Add<Diff<Maximum<Sum<F2, F3>, F>, F3>>,
+    Sum<I, Maximum<Sum<F2, F3>, F>>: Max<Sum<I2, Diff<Maximum<Sum<F2, F3>, F>, F3>>>,
+    R::IsUnsigned: BitAnd<R2::IsUnsigned>,
+    Maximum<Sum<I, Maximum<Sum<F2, F3>, F>>, Sum<I2, Diff<Maximum<Sum<F2, F3>, F>, F3>>>:
+      DivIntermediate<And<R::IsUnsigned, R2::IsUnsigned>>,
+  {
+    if rhs.repr.is_zero(Token::new()) {
+      return Err(DivideError::DivisionByZero);
+    }
+    let from = Self::FRACTION;
+    let by = Decimal::<I2, F2, R2>::FRACTION;
+    let to = Decimal::<I3, F3, R3>::FRACTION;
+    // In units of `10^-F3`, the quotient is `N / D`: `N = c_a * 10^(F3 + F2 - F)` and `D = c_b`, or
+    // `N = c_a` and `D = c_b * 10^(F - F2 - F3)` when that exponent is positive. The intermediate
+    // holds the digits of both and is unsigned only if both operand storages are, so the
+    // coefficients convert to it exactly and the scaling does not overflow.
+    let numerator = self.repr.convert::<<Maximum<
+      Sum<I, Maximum<Sum<F2, F3>, F>>,
+      Sum<I2, Diff<Maximum<Sum<F2, F3>, F>, F3>>,
+    > as DivIntermediate<And<R::IsUnsigned, R2::IsUnsigned>>>::Storage>(
+      Token::new()
+    );
+    let denominator = rhs.repr.convert(Token::new());
+    let (numerator, denominator) = if to + by >= from {
+      (
+        SealedStorage::mul_pow10(numerator, to + by - from, Token::new()),
+        denominator,
+      )
+    } else {
+      (
+        numerator,
+        SealedStorage::mul_pow10(denominator, from - to - by, Token::new()),
+      )
+    };
+    // `|N|, |D| <= 10^W - 1 <= MAX < |MIN|` in the intermediate, so neither operand is `MIN`. The
+    // rounded quotient is at most `|N|`: rounding away from zero needs a remainder, so `|D| >= 2`.
+    let quotient = numerator.round_div(denominator, mode, Token::new());
+    match quotient.checked_convert::<R3>(Token::new()) {
+      Some(coeff) if coeff.within_digits(Decimal::<I3, F3, R3>::DIGITS, Token::new()) => {
+        Ok(Decimal::from_coeff(coeff))
+      }
+      _ => Err(DivideError::OutOfRange),
     }
   }
 }

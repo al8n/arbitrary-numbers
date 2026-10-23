@@ -1,6 +1,8 @@
 use core::{
+  any::TypeId,
   fmt::{Debug, Display},
   hash::{BuildHasher, Hash},
+  ops::{Add, BitAnd, Sub},
   str::FromStr,
 };
 use std::{
@@ -12,15 +14,15 @@ use std::{
 
 use num_bigint::BigInt;
 use typenum::{
-  U0, U1, U2, U3, U4, U5, U6, U8, U9, U10, U11, U12, U15, U16, U17, U18, U19, U20, U21, U22, U26,
-  U28, U34, U37, U38, U39, U40, U49, U58, U59, U60, U70, U76, U77, U78, U96, U97, U116, U120, U135,
-  U153, U154,
+  And, Diff, Max, Maximum, Sum, U0, U1, U2, U3, U4, U5, U6, U8, U9, U10, U11, U12, U15, U16, U17,
+  U18, U19, U20, U21, U22, U26, U28, U30, U34, U37, U38, U39, U40, U49, U58, U59, U60, U70, U76,
+  U77, U78, U96, U97, U116, U120, U135, U136, U143, U144, U153, U154, Unsigned,
 };
 
-use super::{ConvertError, Decimal, ParseError, ParseErrorKind, QuantizeError};
+use super::{ConvertError, Decimal, DivideError, ParseError, ParseErrorKind, QuantizeError};
 use crate::{
-  Layout, RoundingMode, Storage, bigint, i192, i256, i320, i384, i448, i512, u192, u256, u320,
-  u384, u448, u512,
+  DivIntermediate, Layout, RoundingMode, Storage, bigint, i192, i256, i320, i384, i448, i512, u192,
+  u256, u320, u384, u448, u512,
 };
 
 /// `i8` at its 2-digit limit.
@@ -1415,12 +1417,19 @@ fn errors() {
     QuantizeError::OutOfRange.to_string(),
     "quantized decimal out of range of the type"
   );
+  assert_eq!(DivideError::DivisionByZero.to_string(), "division by zero");
+  assert_eq!(
+    DivideError::OutOfRange.to_string(),
+    "quotient out of range of the target type"
+  );
 
-  let errors: [&dyn core::error::Error; 4] = [
+  let errors: [&dyn core::error::Error; 6] = [
     &empty,
     &ConvertError::Inexact,
     &QuantizeError::InvalidStep,
     &QuantizeError::OutOfRange,
+    &DivideError::DivisionByZero,
+    &DivideError::OutOfRange,
   ];
   assert!(errors.iter().all(|err| err.source().is_none()));
 }
@@ -3084,6 +3093,691 @@ fn rounding_in_const_context() {
   assert_eq!(OVERFLOW, Err(QuantizeError::OutOfRange));
   assert_eq!(WIDE.map(|v| v.to_string()), Ok("1.234567891".to_string()));
   assert_eq!(ON_STEP, [false, true, false]);
+}
+
+/// `i64`, with two fraction digits.
+type Budget = Decimal<U12, U2>;
+/// `i16` without fraction digits.
+type D3x0 = Decimal<U3, U0>;
+/// `i192`, with 38 fraction digits, so that dividing by an integer scales the divisor.
+type D2x38 = Decimal<U2, U38>;
+/// `i128`, whose quotient by a 38-digit integer needs a 68-digit intermediate.
+type D1x30 = Decimal<U1, U30>;
+/// `i192`, with 39 digits, the fewest that need it.
+type D20x19 = Decimal<U20, U19>;
+/// `i512`, the target of a division whose intermediate has 153 digits.
+type D143x10 = Decimal<U143, U10>;
+/// `u512`, divided with an intermediate of 154 digits.
+type D136x10u512 = Decimal<U136, U10, u512>;
+type D144x10u512 = Decimal<U144, U10, u512>;
+
+/// The digit count of the intermediate of `div_round`, from the bounds of the method.
+type DivDigits<I, F, I2, F2, F3> =
+  Maximum<Sum<I, Maximum<Sum<F2, F3>, F>>, Sum<I2, Diff<Maximum<Sum<F2, F3>, F>, F3>>>;
+
+/// The digit count, the type and the size of the intermediate storage that `div_round` picks for a
+/// dividend `Decimal<I, F, R>`, a divisor `Decimal<I2, F2, R2>` and `F3` fraction digits.
+fn intermediate<I, F, R, I2, F2, R2, F3>() -> (u32, TypeId, usize)
+where
+  R: Storage,
+  R2: Storage,
+  F2: Add<F3>,
+  Sum<F2, F3>: Max<F>,
+  I: Add<Maximum<Sum<F2, F3>, F>>,
+  Maximum<Sum<F2, F3>, F>: Sub<F3>,
+  I2: Add<Diff<Maximum<Sum<F2, F3>, F>, F3>>,
+  Sum<I, Maximum<Sum<F2, F3>, F>>: Max<Sum<I2, Diff<Maximum<Sum<F2, F3>, F>, F3>>>,
+  R::IsUnsigned: BitAnd<R2::IsUnsigned>,
+  DivDigits<I, F, I2, F2, F3>:
+    Unsigned + DivIntermediate<And<R::IsUnsigned, R2::IsUnsigned>, Storage: 'static>,
+{
+  type Picked<D, B> = <D as DivIntermediate<B>>::Storage;
+  (
+    <DivDigits<I, F, I2, F2, F3> as Unsigned>::U32,
+    TypeId::of::<Picked<DivDigits<I, F, I2, F2, F3>, And<R::IsUnsigned, R2::IsUnsigned>>>(),
+    size_of::<Picked<DivDigits<I, F, I2, F2, F3>, And<R::IsUnsigned, R2::IsUnsigned>>>(),
+  )
+}
+
+/// The intermediates of the documented divisions: native operands with a native or a wide
+/// intermediate, an intermediate wider than both operands and the target, the uint256 amount by a
+/// price, and the widest, of 153 digits or, for two unsigned storages, 154.
+#[test]
+fn div_round_intermediates() {
+  // A budget by a price.
+  assert_eq!(
+    intermediate::<U12, U2, i64, U10, U8, i64, U8>(),
+    (28, TypeId::of::<i128>(), 16)
+  );
+  // A change by an integer, as in the documentation.
+  assert_eq!(
+    intermediate::<U2, U2, i16, U1, U0, i8, U1>(),
+    (4, TypeId::of::<i16>(), 2)
+  );
+  // Two 38-digit native operands need 39 digits.
+  assert_eq!(
+    intermediate::<U19, U19, i128, U1, U1, i8, U19>(),
+    (39, TypeId::of::<i192>(), 24)
+  );
+  // The divisor scaled by `10^30` needs more digits than either operand or the target.
+  assert_eq!(
+    intermediate::<U1, U30, i128, U38, U0, i128, U0>(),
+    (68, TypeId::of::<i256>(), 32)
+  );
+  // An unscaled divisor of 39 digits sets the intermediate.
+  assert_eq!(
+    intermediate::<U1, U1, i8, U20, U19, i192, U0>(),
+    (39, TypeId::of::<i192>(), 24)
+  );
+  // A uint256 amount by a signed or an unsigned 20-digit price.
+  assert_eq!(
+    intermediate::<U60, U18, u320, U10, U10, i128, U18>(),
+    (88, TypeId::of::<i320>(), 40)
+  );
+  assert_eq!(
+    intermediate::<U60, U18, u320, U10, U10, u128, U18>(),
+    (88, TypeId::of::<u320>(), 40)
+  );
+  // The widest: 153 digits, with the dividend or the divisor scaled, and 154 when both storages
+  // are unsigned.
+  assert_eq!(
+    intermediate::<U135, U18, i512, U10, U8, i64, U10>(),
+    (153, TypeId::of::<i512>(), 64)
+  );
+  assert_eq!(
+    intermediate::<U0, U153, i512, U1, U0, i8, U1>(),
+    (153, TypeId::of::<i512>(), 64)
+  );
+  assert_eq!(
+    intermediate::<U136, U10, u512, U10, U8, u64, U10>(),
+    (154, TypeId::of::<u512>(), 64)
+  );
+  // 19 digits fit a `u64` when both storages are unsigned, and need an `i128` otherwise.
+  assert_eq!(
+    intermediate::<U10, U9, u64, U1, U0, u8, U9>(),
+    (19, TypeId::of::<u64>(), 8)
+  );
+  assert_eq!(
+    intermediate::<U10, U9, u64, U1, U0, i8, U9>(),
+    (19, TypeId::of::<i128>(), 16)
+  );
+  // Wide operand storages with few digits divide in a native storage.
+  assert_eq!(
+    intermediate::<U2, U2, i512, U1, U1, u320, U2>(),
+    (5, TypeId::of::<i32>(), 4)
+  );
+}
+
+/// Division by zero is an error for every storage, whatever the dividend, the mode and the
+/// target, also for `0 / 0`; it is reported before anything else, such as a quotient out of range.
+#[test]
+fn div_round_by_zero() {
+  macro_rules! assert_by_zero {
+    ($($repr:ident),+) => {$(
+      {
+        type D = Decimal<U1, U1, $repr>;
+        let name = stringify!($repr);
+        for mode in bigint::MODES {
+          for value in [D::ZERO, D::ONE, D::MAX, D::MIN] {
+            assert_eq!(
+              value.div_round::<U1, U1, $repr, _, _, _>(D::ZERO, mode),
+              Err(DivideError::DivisionByZero),
+              "{value} in {name}, {mode:?}"
+            );
+            assert_eq!(
+              value.div_round::<U0, U1, i8, _, _, _>(D::ZERO, mode),
+              Err(DivideError::DivisionByZero),
+              "{value} in {name}, {mode:?}"
+            );
+            assert_eq!(
+              value.div_round::<U0, U1, u8, _, _, _>(D::ZERO, mode),
+              Err(DivideError::DivisionByZero),
+              "{value} in {name}, {mode:?}"
+            );
+          }
+          // A negative dividend into an unsigned target.
+          assert_eq!(
+            D1x1::MIN.div_round::<U1, U1, u8, _, _, _>(D::ZERO, mode),
+            Err(DivideError::DivisionByZero),
+            "{name}, {mode:?}"
+          );
+        }
+      }
+    )+};
+  }
+
+  assert_by_zero!(
+    i8, i16, i32, i64, i128, i192, i256, i320, i384, i448, i512, u8, u16, u32, u64, u128, u192,
+    u256, u320, u384, u448, u512
+  );
+  for mode in bigint::MODES {
+    assert_eq!(
+      D153x0::MAX.div_round::<U153, U0, i512, _, _, _>(D153x0::ZERO, mode),
+      Err(DivideError::DivisionByZero)
+    );
+    assert_eq!(
+      D154x0u512::MAX.div_round::<U154, U0, u512, _, _, _>(D154x0u512::ZERO, mode),
+      Err(DivideError::DivisionByZero)
+    );
+  }
+}
+
+/// `1 / 4` and `10 / 4` in every mode, with every combination of signs, to fewer fraction digits
+/// than the exact quotient has and to as many, in the order of `bigint::MODES`.
+#[test]
+fn div_round_quarters() {
+  let rows: [(i8, i8, [i8; 7]); 8] = [
+    (10, 4, [3, 2, 3, 2, 3, 2, 2]),
+    (-10, 4, [-3, -2, -2, -3, -3, -2, -2]),
+    (10, -4, [-3, -2, -2, -3, -3, -2, -2]),
+    (-10, -4, [3, 2, 3, 2, 3, 2, 2]),
+    (1, 4, [1, 0, 1, 0, 0, 0, 0]),
+    (-1, 4, [-1, 0, 0, -1, 0, 0, 0]),
+    (1, -4, [-1, 0, 0, -1, 0, 0, 0]),
+    (-1, -4, [1, 0, 1, 0, 0, 0, 0]),
+  ];
+  for (a, b, row) in rows {
+    let (a, b) = (D2x0::from_repr(a).unwrap(), D1x0::from_repr(b).unwrap());
+    // With 38 fraction digits, the divisor is scaled instead of the dividend, in an `i192`.
+    let wide: D2x38 = a.widen();
+    for (mode, expected) in bigint::MODES.into_iter().zip(row) {
+      assert_eq!(
+        a.div_round::<U2, U0, i8, _, _, _>(b, mode)
+          .map(|q| q.repr()),
+        Ok(expected),
+        "{a} / {b} {mode:?}"
+      );
+      assert_eq!(
+        wide
+          .div_round::<U2, U0, i8, _, _, _>(b, mode)
+          .map(|q| q.repr()),
+        Ok(expected),
+        "{a} / {b} {mode:?}"
+      );
+    }
+  }
+  // To one fraction digit, `0.25` is a tie.
+  for (a, b, row) in [
+    (1, 4, [3, 2, 3, 2, 3, 2, 2]),
+    (-1, 4, [-3, -2, -2, -3, -3, -2, -2]),
+    (1, -4, [-3, -2, -2, -3, -3, -2, -2]),
+    (-1, -4, [3, 2, 3, 2, 3, 2, 2]),
+  ] {
+    let (a, b) = (D2x0::from_repr(a).unwrap(), D1x0::from_repr(b).unwrap());
+    for (mode, expected) in bigint::MODES.into_iter().zip(row) {
+      assert_eq!(
+        a.div_round::<U1, U1, i8, _, _, _>(b, mode)
+          .map(|q| q.repr()),
+        Ok(expected),
+        "{a} / {b} {mode:?}"
+      );
+    }
+  }
+  // To two fraction digits, both quotients are exact.
+  for (a, b, expected) in [(1, 4, 25), (-1, 4, -25), (10, 4, 250), (10, -4, -250)] {
+    let (a, b) = (D2x0::from_repr(a).unwrap(), D1x0::from_repr(b).unwrap());
+    for mode in bigint::MODES {
+      assert_eq!(
+        a.div_round::<U2, U2, i16, _, _, _>(b, mode)
+          .map(|q| q.repr()),
+        Ok(expected),
+        "{a} / {b} {mode:?}"
+      );
+    }
+  }
+}
+
+/// With `HalfEven`, a tie goes to the even quotient: the quotient rounded toward zero stays if it
+/// is even and steps away from zero if it is odd.
+#[test]
+fn div_round_half_even_ties() {
+  for (a, b, expected) in [
+    (1, 2, 0),
+    (3, 2, 2),
+    (5, 2, 2),
+    (7, 2, 4),
+    (-1, 2, 0),
+    (-3, 2, -2),
+    (-5, 2, -2),
+    (-7, 2, -4),
+    (5, -2, -2),
+    (-7, -2, 4),
+    (9, 6, 2),
+    (15, 6, 2),
+    (-21, 6, -4),
+  ] {
+    let (a, b) = (D2x0::from_repr(a).unwrap(), D1x0::from_repr(b).unwrap());
+    assert_eq!(
+      a.div_round::<U2, U0, i8, _, _, _>(b, RoundingMode::HalfEven)
+        .map(|q| q.repr()),
+      Ok(expected),
+      "{a} / {b}"
+    );
+    let wide: D2x38 = a.widen();
+    assert_eq!(
+      wide
+        .div_round::<U2, U0, i8, _, _, _>(b, RoundingMode::HalfEven)
+        .map(|q| q.repr()),
+      Ok(expected),
+      "{a} / {b}"
+    );
+  }
+  // At the last fraction digit of the target, by divisors that are not powers of ten.
+  for (a, b, expected) in [
+    ("0.125", "1", "0.12"),
+    ("0.135", "1", "0.14"),
+    ("-0.125", "1", "-0.12"),
+    ("0.0025", "0.02", "0.12"),
+    ("0.0075", "-0.02", "-0.38"),
+  ] {
+    let (a, b): (D4x4, D4x4) = (a.parse().unwrap(), b.parse().unwrap());
+    assert_eq!(
+      a.div_round::<U4, U2, i32, _, _, _>(b, RoundingMode::HalfEven)
+        .map(|q| q.to_string()),
+      Ok(expected.to_string()),
+      "{a} / {b}"
+    );
+  }
+}
+
+/// A negative quotient converts to an unsigned target only if it rounds to zero, whichever operand
+/// is negative; zero divided by a negative divisor is zero, without a sign.
+#[test]
+fn div_round_negative_quotient_into_an_unsigned_target() {
+  use DivideError::OutOfRange;
+  use RoundingMode::{Ceiling, Down, Floor, HalfDown, HalfEven, HalfUp, Up};
+
+  for (a, b, mode, expected) in [
+    ("-0.1", "4", HalfUp, Ok(0)),
+    ("-0.1", "4", HalfEven, Ok(0)),
+    ("-0.1", "4", Down, Ok(0)),
+    ("-0.1", "4", Ceiling, Ok(0)),
+    ("-0.1", "4", Up, Err(OutOfRange)),
+    ("-0.1", "4", Floor, Err(OutOfRange)),
+    ("0.1", "-4", HalfUp, Ok(0)),
+    ("0.1", "-4", Floor, Err(OutOfRange)),
+    // `-0.05` is a tie.
+    ("-0.2", "4", HalfDown, Ok(0)),
+    ("-0.2", "4", HalfEven, Ok(0)),
+    ("-0.2", "4", HalfUp, Err(OutOfRange)),
+    ("-0.2", "-4", Up, Ok(1)),
+    ("-0.4", "4", Ceiling, Err(OutOfRange)),
+  ] {
+    let (a, b): (D2x2, D1x0) = (a.parse().unwrap(), b.parse().unwrap());
+    assert_eq!(
+      a.div_round::<U1, U1, u8, _, _, _>(b, mode)
+        .map(|q| q.repr()),
+      expected,
+      "{a} / {b} {mode:?}"
+    );
+    assert_eq!(
+      a.div_round::<U1, U1, u256, _, _, _>(b, mode)
+        .map(|q| q.repr().to_string()),
+      expected.map(|coeff| coeff.to_string()),
+      "{a} / {b} {mode:?}"
+    );
+  }
+  // An unsigned dividend by a negative divisor divides in a signed intermediate.
+  let tenth: D2x2u16 = "0.1".parse().unwrap();
+  let minus_four: D1x0 = "-4".parse().unwrap();
+  assert_eq!(
+    tenth
+      .div_round::<U1, U1, u8, _, _, _>(minus_four, Ceiling)
+      .map(|q| q.repr()),
+    Ok(0)
+  );
+  assert_eq!(
+    tenth.div_round::<U1, U1, u8, _, _, _>(minus_four, Up),
+    Err(OutOfRange)
+  );
+  for mode in bigint::MODES {
+    for divisor in [minus_four, D1x0::MIN, D1x0::MAX] {
+      let zero = D2x2::ZERO.div_round::<U1, U1, i8, _, _, _>(divisor, mode);
+      assert!(zero.is_ok_and(|q| q.is_zero() && !q.is_negative()));
+      assert_eq!(
+        D2x2::ZERO.div_round::<U1, U1, u8, _, _, _>(divisor, mode),
+        Ok(D1x1u8::ZERO)
+      );
+    }
+  }
+}
+
+/// The range of the target is checked after rounding: a quotient exactly at `MAX` fits, and one
+/// that rounds past it does not, even where the storage holds it. A quotient beyond the target's
+/// storage is out of range, not truncated.
+#[test]
+fn div_round_checks_the_range_after_rounding() {
+  use DivideError::OutOfRange;
+  use RoundingMode::{Ceiling, Down, Floor, HalfDown, HalfEven, HalfUp, Up};
+
+  let two: D1x0 = "2".parse().unwrap();
+  let at_max: Decimal<U3, U2> = "199.98".parse().unwrap();
+  for mode in bigint::MODES {
+    assert_eq!(
+      at_max.div_round::<U2, U2, i16, _, _, _>(two, mode),
+      Ok(D2x2::MAX)
+    );
+    assert_eq!(
+      at_max.neg().div_round::<U2, U2, i16, _, _, _>(two, mode),
+      Ok(D2x2::MIN)
+    );
+  }
+  // `99.995` rounds to `99.99` or to `100.00`, which an `i16` holds but two integral digits do
+  // not; with `HalfEven`, the quotient toward zero, `9999`, is odd.
+  let past: Decimal<U3, U2> = "199.99".parse().unwrap();
+  for (mode, positive, negative) in [
+    (Up, Err(OutOfRange), Err(OutOfRange)),
+    (Down, Ok(D2x2::MAX), Ok(D2x2::MIN)),
+    (Ceiling, Err(OutOfRange), Ok(D2x2::MIN)),
+    (Floor, Ok(D2x2::MAX), Err(OutOfRange)),
+    (HalfUp, Err(OutOfRange), Err(OutOfRange)),
+    (HalfDown, Ok(D2x2::MAX), Ok(D2x2::MIN)),
+    (HalfEven, Err(OutOfRange), Err(OutOfRange)),
+  ] {
+    assert_eq!(
+      past.div_round::<U2, U2, i16, _, _, _>(two, mode),
+      positive,
+      "{mode:?}"
+    );
+    assert_eq!(
+      past.neg().div_round::<U2, U2, i16, _, _, _>(two, mode),
+      negative,
+      "{mode:?}"
+    );
+  }
+  // `300` and `-200` truncate to two digits in an `i8` and a `u8`, but are out of range.
+  let one: D1x0 = "1".parse().unwrap();
+  for mode in bigint::MODES {
+    assert_eq!(
+      D3x0::from_repr(600)
+        .unwrap()
+        .div_round::<U2, U0, i8, _, _, _>(two, mode),
+      Err(OutOfRange)
+    );
+    assert_eq!(
+      D3x0::from_repr(-200)
+        .unwrap()
+        .div_round::<U2, U0, u8, _, _, _>(one, mode),
+      Err(OutOfRange)
+    );
+    // `2^64 + 5` in an `i192` truncates to `5` in an `i64`.
+    let beyond: D39x18 = "18446744073709551621".parse().unwrap();
+    assert_eq!(
+      beyond.div_round::<U18, U0, i64, _, _, _>(one, mode),
+      Err(OutOfRange)
+    );
+    assert_eq!(
+      beyond
+        .div_round::<U20, U0, i128, _, _, _>(one, mode)
+        .map(|q| q.repr()),
+      Ok(18_446_744_073_709_551_621)
+    );
+  }
+}
+
+/// `MIN` divided by a coefficient of `-1` and by itself, in its own type: the intermediate holds
+/// every coefficient, so neither operand is the intermediate's `MIN`.
+#[test]
+fn div_round_at_the_limits() {
+  for mode in bigint::MODES {
+    let minus_one = D2x0::from_repr(-1).unwrap();
+    assert_eq!(
+      D2x0::MIN.div_round::<U2, U0, i8, _, _, _>(minus_one, mode),
+      Ok(D2x0::MAX)
+    );
+    assert_eq!(
+      D2x0::MIN.div_round::<U2, U0, i8, _, _, _>(D2x0::MIN, mode),
+      Ok(D2x0::ONE)
+    );
+    assert_eq!(
+      D2x0::MAX.div_round::<U2, U0, i8, _, _, _>(D2x0::MIN, mode),
+      Ok(D2x0::ONE.neg())
+    );
+    let minus_one = D38x0::from_repr(-1).unwrap();
+    assert_eq!(
+      D38x0::MIN.div_round::<U38, U0, i128, _, _, _>(minus_one, mode),
+      Ok(D38x0::MAX)
+    );
+    assert_eq!(
+      D38x0::MIN.div_round::<U38, U0, i128, _, _, _>(D38x0::MIN, mode),
+      Ok(D38x0::ONE)
+    );
+    let minus_one = D153x0::ONE.neg();
+    assert_eq!(
+      D153x0::MIN.div_round::<U153, U0, i512, _, _, _>(minus_one, mode),
+      Ok(D153x0::MAX)
+    );
+    assert_eq!(
+      D153x0::MIN.div_round::<U153, U0, i512, _, _, _>(D153x0::MIN, mode),
+      Ok(D153x0::ONE)
+    );
+    assert_eq!(
+      D154x0u512::MAX.div_round::<U154, U0, u512, _, _, _>(D154x0u512::MAX, mode),
+      Ok(D154x0u512::ONE)
+    );
+    assert_eq!(
+      D154x0u512::MAX.div_round::<U154, U0, u512, _, _, _>(D154x0u512::ONE, mode),
+      Ok(D154x0u512::MAX)
+    );
+    // `-9.9 / -0.1` into a type with more integral digits.
+    let tenth = D1x1::from_repr(-1).unwrap();
+    assert_eq!(
+      D1x1::MIN
+        .div_round::<U2, U0, i8, _, _, _>(tenth, mode)
+        .map(|q| q.repr()),
+      Ok(99)
+    );
+  }
+}
+
+/// One case of each family of storages, against quotients computed by hand, in the order of
+/// `bigint::MODES` where the mode matters.
+#[test]
+fn div_round_storage_families() {
+  // Native operands with a native intermediate: the quantity that a budget buys at a price.
+  let budget: Budget = "1000".parse().unwrap();
+  let price: Price = "64250.5".parse().unwrap();
+  for (mode, expected) in bigint::MODES.into_iter().zip([
+    "0.01556409",
+    "0.01556408",
+    "0.01556409",
+    "0.01556408",
+    "0.01556408",
+    "0.01556408",
+    "0.01556408",
+  ]) {
+    let quantity: Quantity = budget.div_round(price, mode).unwrap();
+    assert_eq!(quantity.to_string(), expected, "{mode:?}");
+  }
+
+  // Native operands with a wide intermediate of 39 digits.
+  let divisor: D1x1 = "0.7".parse().unwrap();
+  let seventh = "14285714285714285714.2857142857142857";
+  for (mode, last) in bigint::MODES
+    .into_iter()
+    .zip(["142", "141", "142", "141", "141", "141", "141"])
+  {
+    let quotient: D20x19 = D19x19::MAX.div_round(divisor, mode).unwrap();
+    assert_eq!(quotient.to_string(), format!("{seventh}{last}"), "{mode:?}");
+  }
+
+  // A native dividend by a 39-digit divisor, whose digits alone need an `i192`.
+  for (mode, (positive, negative)) in
+    bigint::MODES
+      .into_iter()
+      .zip([(1, -1), (0, 0), (1, 0), (0, -1), (0, 0), (0, 0), (0, 0)])
+  {
+    assert_eq!(
+      D1x1::MAX
+        .div_round::<U2, U0, i8, _, _, _>(D20x19::MAX, mode)
+        .map(|q| q.repr()),
+      Ok(positive),
+      "{mode:?}"
+    );
+    assert_eq!(
+      D1x1::MAX
+        .div_round::<U2, U0, i8, _, _, _>(D20x19::MIN, mode)
+        .map(|q| q.repr()),
+      Ok(negative),
+      "{mode:?}"
+    );
+  }
+
+  // Wide operands, with a 76-digit intermediate.
+  let seven: D20x19 = "7".parse().unwrap();
+  let digits = "142857142857142857142857142857142857142.857142857142857";
+  for (mode, positive, negative) in [
+    (RoundingMode::Up, "143", "143"),
+    (RoundingMode::Down, "142", "142"),
+    (RoundingMode::Ceiling, "143", "142"),
+    (RoundingMode::Floor, "142", "143"),
+    (RoundingMode::HalfUp, "143", "143"),
+    (RoundingMode::HalfDown, "143", "143"),
+    (RoundingMode::HalfEven, "143", "143"),
+  ] {
+    let quotient: D39x18 = D39x18::MAX.div_round(seven, mode).unwrap();
+    assert_eq!(
+      quotient.to_string(),
+      format!("{digits}{positive}"),
+      "{mode:?}"
+    );
+    let quotient: D39x18 = D39x18::MAX.div_round(seven.neg(), mode).unwrap();
+    assert_eq!(
+      quotient.to_string(),
+      format!("-{digits}{negative}"),
+      "{mode:?}"
+    );
+  }
+
+  // Two unsigned storages divide in an unsigned intermediate, and mixed signs in a signed one.
+  let third: D10x9u64 = "3".parse().unwrap();
+  let quotient: D10x9u64 = D10x9u64::MAX.div_round(third, RoundingMode::Up).unwrap();
+  assert_eq!(quotient.to_string(), "3333333333.333333333");
+  let one: D10x9u64 = "1".parse().unwrap();
+  let minus_three: Price = "-3".parse().unwrap();
+  for (mode, expected) in bigint::MODES.into_iter().zip([
+    "-0.33333334",
+    "-0.33333333",
+    "-0.33333333",
+    "-0.33333334",
+    "-0.33333333",
+    "-0.33333333",
+    "-0.33333333",
+  ]) {
+    let quotient: Price = one.div_round(minus_three, mode).unwrap();
+    assert_eq!(quotient.to_string(), expected, "{mode:?}");
+  }
+
+  // An intermediate of 68 digits, wider than both operands and the target: the divisor is scaled
+  // by `10^30`.
+  let five: D1x30 = "5".parse().unwrap();
+  let two: D38x0 = "2".parse().unwrap();
+  let almost_ten: D1x30 = format!("9.{}", nines(30)).parse().unwrap();
+  let large: D38x0 = format!("1{}", zeros(37)).parse().unwrap();
+  for (mode, (tie, tiny)) in
+    bigint::MODES
+      .into_iter()
+      .zip([(3, 1), (2, 0), (3, 1), (2, 0), (3, 0), (2, 0), (2, 0)])
+  {
+    assert_eq!(
+      five
+        .div_round::<U1, U0, i8, _, _, _>(two, mode)
+        .map(|q| q.repr()),
+      Ok(tie),
+      "{mode:?}"
+    );
+    assert_eq!(
+      almost_ten
+        .div_round::<U1, U0, i8, _, _, _>(large, mode)
+        .map(|q| q.repr()),
+      Ok(tiny),
+      "{mode:?}"
+    );
+  }
+
+  // A uint256 amount by a 20-digit price, in an 88-digit intermediate: signed for a signed price,
+  // so a negative price gives a negative quotient, which is out of range.
+  let amount: TokenAmount = "1000000".parse().unwrap();
+  let price: Decimal<U10, U10> = "1234.5678".parse().unwrap();
+  let down: TokenAmount = amount.div_round(price, RoundingMode::Down).unwrap();
+  assert_eq!(down.to_string(), "810.00006642000544644");
+  let up: TokenAmount = amount.div_round(price, RoundingMode::Up).unwrap();
+  assert_eq!(up.to_string(), "810.000066420005446441");
+  assert_eq!(
+    amount.div_round::<U60, U18, u320, _, _, _>(price.neg(), RoundingMode::Down),
+    Err(DivideError::OutOfRange)
+  );
+  let price: Decimal<U10, U10, u128> = "1234.5678".parse().unwrap();
+  let down: TokenAmount = amount.div_round(price, RoundingMode::Down).unwrap();
+  assert_eq!(down.to_string(), "810.00006642000544644");
+}
+
+/// The widest intermediates: 153 digits with the dividend scaled or with the divisor scaled, and
+/// 154 digits for two unsigned storages.
+#[test]
+fn div_round_with_the_widest_intermediates() {
+  let tick: Price = "0.00000001".parse().unwrap();
+  let one: Price = "1".parse().unwrap();
+  let max_by_tick = format!("{}.{}", nines(143), nines(10));
+  for mode in bigint::MODES {
+    let quotient: D143x10 = D135x18::MAX.div_round(tick, mode).unwrap();
+    assert_eq!(quotient.to_string(), max_by_tick, "{mode:?}");
+  }
+  for (mode, expected) in bigint::MODES.into_iter().zip([
+    format!("1{}", zeros(135)),
+    format!("{}.{}", nines(135), nines(10)),
+    format!("1{}", zeros(135)),
+    format!("{}.{}", nines(135), nines(10)),
+    format!("1{}", zeros(135)),
+    format!("1{}", zeros(135)),
+    format!("1{}", zeros(135)),
+  ]) {
+    let quotient: D143x10 = D135x18::MAX.div_round(one, mode).unwrap();
+    assert_eq!(quotient.to_string(), expected, "{mode:?}");
+    let quotient: D143x10 = D135x18::MIN.div_round(one, mirror(mode)).unwrap();
+    assert_eq!(quotient.to_string(), format!("-{expected}"), "{mode:?}");
+  }
+
+  // The divisor scaled by `10^152`.
+  let three: D1x0 = "3".parse().unwrap();
+  let quarter: D0x153 = "0.25".parse().unwrap();
+  let unit: D1x0 = "1".parse().unwrap();
+  for (mode, (third, tie)) in
+    bigint::MODES
+      .into_iter()
+      .zip([(4, 3), (3, 2), (4, 3), (3, 2), (3, 3), (3, 2), (3, 2)])
+  {
+    assert_eq!(
+      D0x153::MAX
+        .div_round::<U1, U1, i8, _, _, _>(three, mode)
+        .map(|q| q.repr()),
+      Ok(third),
+      "{mode:?}"
+    );
+    assert_eq!(
+      quarter
+        .div_round::<U1, U1, i8, _, _, _>(unit, mode)
+        .map(|q| q.repr()),
+      Ok(tie),
+      "{mode:?}"
+    );
+  }
+
+  let tick: Decimal<U10, U8, u64> = "0.00000001".parse().unwrap();
+  let expected = format!("{}.99", nines(144));
+  for mode in bigint::MODES {
+    let quotient: D144x10u512 = D136x10u512::MAX.div_round(tick, mode).unwrap();
+    assert_eq!(quotient.to_string(), expected, "{mode:?}");
+  }
+}
+
+/// The mode that rounds `-x` as `mode` rounds `x`, negated.
+fn mirror(mode: RoundingMode) -> RoundingMode {
+  match mode {
+    RoundingMode::Ceiling => RoundingMode::Floor,
+    RoundingMode::Floor => RoundingMode::Ceiling,
+    other => other,
+  }
 }
 
 #[cfg(feature = "serde")]

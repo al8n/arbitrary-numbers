@@ -81,8 +81,8 @@ fn main() -> Result<(), ParseError> {
 - 所有运算要么精确，要么失败：`checked_add` 与 `checked_sub` 超出范围时返回 `None`；`exact_mul`
   返回一定放得下乘积的更宽类型，乘积最多 153 位；`widen` 转换到位数不少于原类型的类型；`try_convert`
   在超出范围或会丢失位数时返回 `OutOfRange` 或 `Inexact`，从不舍入。只有显式给出 `RoundingMode`
-  的地方才会舍入：`round_to` 转换到小数位更少的类型，`quantize` 舍入到步长的整数倍。不提供
-  `+`、`-`、`*`、`/` 运算符。
+  的地方才会舍入：`round_to` 转换到小数位更少的类型，`quantize` 舍入到步长的整数倍，`div_round`
+  做除法并把商舍入到任意十进制类型。不提供 `+`、`-`、`*`、`/` 运算符。
 - 转换遵循存储的符号：两个无符号存储的乘积用无符号存储，其他乘积用有符号存储；`widen`
   可以把无符号存储转换为任何存储，但有符号存储只能转换为有符号存储；`try_convert`
   把负数转换为无符号存储时返回 `OutOfRange`。

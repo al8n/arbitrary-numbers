@@ -34,6 +34,11 @@ FEATURES
   - `const fn` `quantize` rounds to a multiple of a step of the same type with the mode, and reports
     the new `QuantizeError`: `InvalidStep` for a step that is zero or negative, and `OutOfRange` for
     a multiple outside the range.
+  - `div_round` divides by a decimal of any type into any decimal type, rounding the quotient once
+    with the mode, and reports the new `DivideError`: `DivisionByZero` for a zero divisor, which
+    never gives zero, and `OutOfRange` for a quotient outside the target's range. The intermediate
+    is sized at the type level; one of more than 153 digits fails to compile, and 154 is allowed
+    only when both storages are unsigned.
   - `const fn` `is_multiple_of` checks a value against a step without rounding it.
 - The `serde` feature: `Decimal` is written as its text and read from a string, never from a number,
   in every format, and `RoundingMode` as the name of its variant, without allocation. The impls use

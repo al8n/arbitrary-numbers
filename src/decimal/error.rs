@@ -100,3 +100,24 @@ impl fmt::Display for QuantizeError {
 }
 
 impl core::error::Error for QuantizeError {}
+
+/// The error returned by [`Decimal::div_round`](crate::Decimal::div_round).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum DivideError {
+  /// The divisor is zero.
+  DivisionByZero,
+  /// The rounded quotient is outside the range of the target type.
+  OutOfRange,
+}
+
+impl fmt::Display for DivideError {
+  fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    f.write_str(match self {
+      Self::DivisionByZero => "division by zero",
+      Self::OutOfRange => "quotient out of range of the target type",
+    })
+  }
+}
+
+impl core::error::Error for DivideError {}

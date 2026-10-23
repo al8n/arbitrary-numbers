@@ -14,6 +14,11 @@
 //! and whether any later one is nonzero; neither shares the crate's rule. Values at and next to
 //! ties are generated for every number of dropped digits, and every mode is checked on each value,
 //! together with the symmetry between a value and its negation.
+//!
+//! Division is checked against the same reference, applied to the exact quotient with both operands
+//! scaled and a divisor of either sign, on random operands, the extremes of each type and quotients
+//! at and next to ties. Each case also checks the identities between the signs of the operands and
+//! the quotient, and that dividing by one rounds as `round_to` does.
 
 // Under Miri on a 32-bit target, the `num-bigint` and `proptest` allocations of this suite use up
 // Miri's 32-bit address space. It still runs natively, and under Miri on the 64-bit targets.
@@ -22,12 +27,12 @@
 use bigdecimal::BigDecimal;
 use num_bigint::{BigInt, Sign};
 use numo::{
-  ConvertError, Decimal, ParseErrorKind, QuantizeError, RoundingMode, i192, i256, i320, i384, i448,
-  i512,
+  ConvertError, Decimal, DivideError, ParseErrorKind, QuantizeError, RoundingMode, i192, i256,
+  i320, i384, i448, i512,
   typenum::{
     U0, U1, U2, U3, U4, U5, U6, U7, U8, U9, U10, U11, U12, U14, U16, U17, U18, U19, U20, U22, U26,
-    U28, U36, U37, U38, U39, U49, U58, U59, U60, U61, U69, U70, U76, U78, U79, U90, U96, U97, U98,
-    U116, U117, U135, U153, U154,
+    U28, U30, U36, U37, U38, U39, U49, U58, U59, U60, U61, U69, U70, U76, U78, U79, U90, U96, U97,
+    U98, U116, U117, U135, U153, U154,
   },
   u192, u256, u320, u384, u448, u512,
 };
@@ -762,6 +767,11 @@ suite!(d10x10: Decimal<U10, U10>, i128, signed, integral = 10, fraction = 10);
 suite!(u10x10: Decimal<U10, U10, u128>, u128, unsigned, integral = 10, fraction = 10);
 suite!(uw58x18: Decimal<U58, U18, u256>, u256, unsigned, integral = 58, fraction = 18);
 
+// Operands for divisions: a budget, and a dividend whose quotient by a 38-digit integer needs a
+// 68-digit intermediate.
+suite!(d12x2: Decimal<U12, U2>, i64, signed, integral = 12, fraction = 2);
+suite!(d1x30: Decimal<U1, U30>, i128, signed, integral = 1, fraction = 30);
+
 /// The reference and the crate both agree with coefficients computed by hand, so that they cannot
 /// share a mistake unnoticed.
 #[test]
@@ -1317,24 +1327,26 @@ fn mirror(mode: RoundingMode) -> RoundingMode {
   }
 }
 
-/// `value / divisor` rounded to an integer with `mode`, for `divisor > 0`.
+/// `value / divisor` rounded to an integer with `mode`, for any nonzero divisor.
 ///
-/// Picks between the integers below and above the exact quotient by their distances to it, and
-/// breaks a tie by direction or parity. The crate instead compares the remainder of a division
-/// toward zero with its distance to the divisor.
+/// Picks between the integers below and above the exact quotient by their distances to it, scaled
+/// by `|divisor|`, and breaks a tie by direction or parity, taking the direction from the sign of
+/// the exact quotient. The crate instead makes the divisor positive and compares the remainder of a
+/// division toward zero with its distance to the divisor.
 fn oracle_round(value: &BigInt, divisor: &BigInt, mode: RoundingMode) -> BigInt {
-  // `floor * divisor <= value < (floor + 1) * divisor`; `/` rounds toward zero.
-  let mut floor = value / divisor;
-  if &floor * divisor > *value {
-    floor -= 1u8;
+  // `/` rounds toward zero, which is the floor unless the exact quotient is negative and not an
+  // integer.
+  let truncated = value / divisor;
+  if &truncated * divisor == *value {
+    return truncated;
   }
-  let below = value - &floor * divisor;
-  if below.sign() == Sign::NoSign {
-    return floor;
-  }
+  let negative = (value.sign() == Sign::Minus) != (divisor.sign() == Sign::Minus);
+  let floor = if negative { truncated - 1u8 } else { truncated };
   let ceiling = &floor + 1u8;
-  let above = &ceiling * divisor - value;
-  let (toward_zero, away_from_zero) = if value.sign() == Sign::Minus {
+  // `(q - floor) * |divisor|` and `(ceiling - q) * |divisor|` for the exact quotient `q`.
+  let below = (value - &floor * divisor).magnitude().clone();
+  let above = (&ceiling * divisor - value).magnitude().clone();
+  let (toward_zero, away_from_zero) = if negative {
     (ceiling.clone(), floor.clone())
   } else {
     (floor.clone(), ceiling.clone())
@@ -1728,3 +1740,229 @@ quantize!(quantize_uint256: uint256);
 quantize!(quantize_u512: uw135x18);
 quantize!(quantize_u512_integral: uw154x0);
 quantize!(quantize_u512_fraction: uw0x154);
+
+/// The coefficient of the quotient `numerator / denominator` rounded with `mode`, checked against a
+/// target with `digits` digits in total and a signed or an unsigned storage.
+///
+/// The caller scales both operands: `a * 10^(F2 + F3)` by `b * 10^F`, where the crate scales one.
+fn oracle_div_round(
+  numerator: &BigInt,
+  denominator: &BigInt,
+  digits: u32,
+  signed: bool,
+  mode: RoundingMode,
+) -> Result<BigInt, DivideError> {
+  if denominator.sign() == Sign::NoSign {
+    return Err(DivideError::DivisionByZero);
+  }
+  in_target(oracle_round(numerator, denominator, mode), digits, signed)
+    .map_err(|_| DivideError::OutOfRange)
+}
+
+/// The fraction digits, the largest coefficient and the sign of an operand's type.
+#[derive(Clone, Debug)]
+struct Operand {
+  fraction: u32,
+  max: BigInt,
+  signed: bool,
+}
+
+impl Operand {
+  /// Zero, one and two units and the two largest coefficients, also negated for a signed type.
+  fn extremes(&self) -> Vec<BigInt> {
+    let mut values = vec![
+      BigInt::ZERO,
+      BigInt::from(1u8),
+      BigInt::from(2u8),
+      self.max.clone(),
+      &self.max - 1u8,
+    ];
+    if self.signed {
+      let negated: Vec<BigInt> = values.iter().map(|value| -value).collect();
+      values.extend(negated);
+    }
+    values
+  }
+}
+
+/// Coefficients of a dividend and a divisor whose quotient, in units of `10^-to`, is an integer or
+/// halfway between two, or is moved from one by a unit of the dividend; `None` if no tie fits the
+/// divisor's type.
+///
+/// With `k = F2 + to - F`, the quotient is `a * 10^k / b`. For `k >= 0`, `a = m * t` and
+/// `b = 2^(k + 1) * t` give `m * 5^k / 2`; for `k < 0`, `a = m * t * 5 * 10^(-k - 1)` and `b = t`
+/// give `m / 2`. Either is a tie for an odd `m` and an integer for an even one.
+fn quotients_near_ties(
+  dividend: &Operand,
+  divisor: &Operand,
+  to: u32,
+) -> Option<BoxedStrategy<(BigInt, BigInt)>> {
+  let k = i64::from(divisor.fraction) + i64::from(to) - i64::from(dividend.fraction);
+  let (a_unit, b_unit) = if k >= 0 {
+    (
+      BigInt::from(1u8),
+      BigInt::from(2u8).pow(k.unsigned_abs() as u32 + 1),
+    )
+  } else {
+    (pow10(k.unsigned_abs() as u32 - 1) * 5u8, BigInt::from(1u8))
+  };
+  // `t` keeps `b` in range and leaves room in `a` for `m = 1` and one more unit.
+  let max_t = (&divisor.max / &b_unit).min((&dividend.max - 1u8) / &a_unit);
+  if max_t.sign() == Sign::NoSign {
+    return None;
+  }
+  let (dividend, divisor) = (dividend.clone(), divisor.clone());
+  let length = |max: &BigInt| max.to_string().len();
+  let t = prop_oneof![digit_text(2), digit_text(length(&max_t))];
+  let m = prop_oneof![digit_text(2), digit_text(length(&dividend.max))];
+  let strategy = (t, m, any::<bool>(), -1i8..=1, any::<bool>(), any::<bool>()).prop_map(
+    move |(t, m, tie, offset, negative_a, negative_b)| {
+      let t = t.parse::<BigInt>().expect("ASCII digits") % &max_t + 1u8;
+      let max_m = (&dividend.max - 1u8) / (&t * &a_unit);
+      let mut m = m.parse::<BigInt>().expect("ASCII digits") % (&max_m + 1u8);
+      // An odd `m` gives a tie and an even one an integer.
+      if ((&m % 2u8).sign() == Sign::NoSign) == tie {
+        m = if m < max_m { m + 1u8 } else { m - 1u8 };
+      }
+      let a = BigInt::from((m * &t * &a_unit + offset).magnitude().clone());
+      let b = &t * &b_unit;
+      (
+        if negative_a && dividend.signed { -a } else { a },
+        if negative_b && divisor.signed { -b } else { b },
+      )
+    },
+  );
+  Some(strategy.boxed())
+}
+
+/// Dividends and divisors for a division to `to` fraction digits: random coefficients, the extremes
+/// of each type, and, where a tie fits the divisor, quotients at and next to ties and integers.
+fn division_operands(
+  dividends: BoxedStrategy<BigInt>,
+  dividend: &Operand,
+  divisors: BoxedStrategy<BigInt>,
+  divisor: &Operand,
+  to: u32,
+) -> BoxedStrategy<(BigInt, BigInt)> {
+  let a = prop_oneof![3 => dividends, 1 => proptest::sample::select(dividend.extremes())];
+  let b = prop_oneof![3 => divisors, 1 => proptest::sample::select(divisor.extremes())];
+  match quotients_near_ties(dividend, divisor, to) {
+    Some(ties) => prop_oneof![2 => (a, b), 1 => ties].boxed(),
+    None => (a, b).boxed(),
+  }
+}
+
+macro_rules! div_round {
+  ($name:ident: $lhs:ident / $rhs:ident -> $target:ident) => {
+    proptest! {
+      #![proptest_config(config())]
+
+      #[test]
+      fn $name(
+        (big_a, big_b) in division_operands(
+          $lhs::value().prop_map($lhs::big).boxed(),
+          &Operand { fraction: $lhs::FRACTION, max: max_coeff($lhs::DIGITS), signed: $lhs::SIGNED },
+          $rhs::value().prop_map($rhs::big).boxed(),
+          &Operand { fraction: $rhs::FRACTION, max: max_coeff($rhs::DIGITS), signed: $rhs::SIGNED },
+          $target::FRACTION,
+        ),
+      ) {
+        let a = $lhs::from_big(&big_a).expect("a dividend in range");
+        let b = $rhs::from_big(&big_b).expect("a divisor in range");
+        let numerator = &big_a * pow10($rhs::FRACTION + $target::FRACTION);
+        let denominator = &big_b * pow10($lhs::FRACTION);
+        let negated_a = $lhs::from_big(&-&big_a);
+        let negated_b = $rhs::from_big(&-&big_b);
+        let one = $rhs::from_big(&pow10($rhs::FRACTION));
+        for mode in MODES {
+          let quotient: Result<$target::T, DivideError> = a.div_round(b, mode);
+          let quotient = quotient.map($target::big);
+          let expected =
+            oracle_div_round(&numerator, &denominator, $target::DIGITS, $target::SIGNED, mode);
+          prop_assert_eq!(&quotient, &expected, "{} / {} {:?}", a, b, mode);
+          // `div_round(-a, -b, m) == div_round(a, b, m)`.
+          if let (Some(negated_a), Some(negated_b)) = (negated_a, negated_b) {
+            let both: Result<$target::T, DivideError> = negated_a.div_round(negated_b, mode);
+            prop_assert_eq!(both.map($target::big), quotient.clone(), "{} / {} {:?}", a, b, mode);
+          }
+          // `div_round(-a, b, m) == -div_round(a, b, mirror(m))`, and the same for `-b`, into a
+          // signed type.
+          if let (true, Some(negated_a)) = ($target::SIGNED, negated_a) {
+            let mirrored: Result<$target::T, DivideError> = negated_a.div_round(b, mirror(mode));
+            prop_assert_eq!(
+              mirrored.map(|q| -$target::big(q)),
+              quotient.clone(),
+              "{} / {} {:?}",
+              a,
+              b,
+              mode
+            );
+          }
+          if let (true, Some(negated_b)) = ($target::SIGNED, negated_b) {
+            let mirrored: Result<$target::T, DivideError> = a.div_round(negated_b, mirror(mode));
+            prop_assert_eq!(
+              mirrored.map(|q| -$target::big(q)),
+              quotient.clone(),
+              "{} / {} {:?}",
+              a,
+              b,
+              mode
+            );
+          }
+          // Dividing by one rounds as `round_to` does.
+          if let Some(one) = one {
+            let divided: Result<$target::T, DivideError> = a.div_round(one, mode);
+            let rounded: Result<$target::T, ConvertError> = a.round_to(mode);
+            prop_assert_eq!(
+              divided.map($target::big),
+              rounded.map($target::big).map_err(|_| DivideError::OutOfRange),
+              "{} {:?}",
+              a,
+              mode
+            );
+          }
+        }
+      }
+    }
+  };
+}
+
+// Native operands with a native intermediate, of either sign, with the dividend scaled, neither or
+// the divisor scaled, to fewer and to more fraction digits than the dividend has.
+div_round!(div_i8_by_i8: d1x1 / d1x1 -> d1x1);
+div_round!(div_without_scaling: d3x1 / d1x1 -> d2x0);
+div_round!(div_to_fewer_fraction_digits: d4x5 / d3x1 -> d3x1);
+div_round!(div_to_more_fraction_digits: d3x1 / d4x5 -> d4x5);
+div_round!(div_fraction_by_integral: d0x2 / d2x0 -> d0x2);
+div_round!(div_price_by_price: d10x8 / d10x8 -> d12x8);
+div_round!(div_budget_by_price: d12x2 / d10x8 -> d12x8);
+div_round!(div_wide_storage_native_intermediate: d2x2_in_i512 / d1x1 -> d2x2_in_i320);
+// Two unsigned storages divide in an unsigned intermediate, and any other pair in a signed one. A
+// negative quotient converts to an unsigned target only when it rounds to zero.
+div_round!(div_u8_by_u8: u1x1 / u1x1 -> u1x1);
+div_round!(div_unsigned: u10x9 / u10x9 -> u10x9);
+div_round!(div_unsigned_by_signed: u10x9 / d10x8 -> d10x8);
+div_round!(div_signed_into_unsigned: d10x8 / d10x8 -> u10x9);
+div_round!(div_signed_by_unsigned_into_unsigned: d4x5 / u3x1 -> u4x5);
+// Native operands with a wide intermediate: 39 digits with the dividend or the divisor scaled, and
+// 68 digits, more than either operand or the target has.
+div_round!(div_i128_into_i192: d19x19 / d1x1 -> w20x19);
+div_round!(div_scaled_divisor_in_i192: d0x38 / d1x1 -> d2x0);
+div_round!(div_i128_by_i128_in_i256: d1x30 / d38x0 -> d2x0);
+div_round!(div_i8_by_i192: d1x1 / w20x19 -> d2x0);
+// Wide operands, of either sign, into wide and native targets.
+div_round!(div_i192_by_i192: w39x18 / w20x19 -> w39x18);
+div_round!(div_u192_by_u192: uw39x18 / uw20x19 -> uw39x18);
+div_round!(div_i64_by_i192: d10x8 / w39x18 -> d10x8);
+div_round!(div_i256_by_i192_into_i64: w58x18 / w39x18 -> d10x8);
+div_round!(div_u256_by_i192: uw59x18 / w20x19 -> w58x18);
+div_round!(div_uint256_by_signed_price: uint256 / d10x10 -> uint256);
+div_round!(div_uint256_by_unsigned_price: uint256 / u10x10 -> uint256);
+div_round!(div_scaled_divisor_in_i384: w0x96 / d1x1 -> d2x0);
+// The widest intermediates: 153 digits with the dividend scaled, neither or the divisor scaled, and
+// 154 digits for two unsigned storages.
+div_round!(div_i512_scaled_dividend: w97x18 / d0x38 -> w58x18);
+div_round!(div_i512_without_scaling: w135x18 / d10x8 -> d10x10);
+div_round!(div_i512_scaled_divisor: w0x153 / d1x1 -> d1x1);
+div_round!(div_u512_scaled_dividend: uw135x18 / u10x9 -> u10x10);
+div_round!(div_u512_without_scaling: uw154x0 / u10x0 -> uw154x0);
