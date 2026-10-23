@@ -19,6 +19,11 @@
 //! scaled and a divisor of either sign, on random operands, the extremes of each type and quotients
 //! at and next to ties. Each case also checks the identities between the signs of the operands and
 //! the quotient, and that dividing by one rounds as `round_to` does.
+//!
+//! Scientific notation (`{:e}` and `{:E}`) is checked, for every precision, against a reference
+//! that finds the first digit and its exponent in the positional text, and, for values of at most
+//! 15 significant digits, against `f64`, whose shortest text is then the exact one. The text of
+//! every value must also read back, with a sign, zero padding and extra fraction digits.
 
 // Under Miri on a 32-bit target, the `num-bigint` and `proptest` allocations of this suite use up
 // Miri's 32-bit address space. It still runs natively, and under Miri on the 64-bit targets.
@@ -191,6 +196,54 @@ fn oracle_text(coeff: &BigInt, fraction: u32, precision: usize) -> String {
     text.push_str(&fraction_digits);
   }
   text
+}
+
+/// The scientific text of `coeff / 10^fraction`: the significant digits with the point after the
+/// first, padded to at least `precision` fraction digits, then `e` or `E` and the exponent of the
+/// first digit. Zero is `0e0`.
+///
+/// The first digit and its exponent are read off the positional text, as the place of the first
+/// nonzero digit relative to the point, where the crate computes them from the number of digits.
+fn oracle_exp_text(coeff: &BigInt, fraction: u32, precision: usize, upper: bool) -> String {
+  let positional = oracle_text(coeff, fraction, 0);
+  let magnitude = positional.trim_start_matches('-');
+  let (integral, fraction_digits) = magnitude.split_once('.').unwrap_or((magnitude, ""));
+  let (digits, exponent) = if integral != "0" {
+    (
+      format!("{integral}{fraction_digits}"),
+      integral.len() as i64 - 1,
+    )
+  } else {
+    let zeros = fraction_digits.len() - fraction_digits.trim_start_matches('0').len();
+    (fraction_digits[zeros..].to_owned(), -(zeros as i64) - 1)
+  };
+  let digits = digits.trim_end_matches('0');
+  let (digits, exponent) = if digits.is_empty() {
+    ("0", 0)
+  } else {
+    (digits, exponent)
+  };
+
+  let (first, rest) = digits.split_at(1);
+  let mut text = String::new();
+  if coeff.sign() == Sign::Minus {
+    text.push('-');
+  }
+  text.push_str(first);
+  if !rest.is_empty() || precision > 0 {
+    text.push('.');
+    text.push_str(rest);
+    text.push_str(&"0".repeat(precision.saturating_sub(rest.len())));
+  }
+  text.push(if upper { 'E' } else { 'e' });
+  text.push_str(&exponent.to_string());
+  text
+}
+
+/// The number of digits from the first to the last nonzero digit of the decimal text `text`.
+fn significant_digits(text: &str) -> usize {
+  let digits: String = text.chars().filter(char::is_ascii_digit).collect();
+  digits.trim_matches('0').len()
 }
 
 /// The coefficient that `input` denotes for `integral` and `fraction` digits, where only a signed
@@ -565,6 +618,28 @@ macro_rules! suite {
           .boxed()
       }
 
+      /// Values of at most 15 significant digits: up to 15 random digits, then as many zeros as a
+      /// random count that the type has room for.
+      fn short_value() -> BoxedStrategy<T> {
+        (digit_text((DIGITS as usize).min(15)), any::<bool>())
+          .prop_flat_map(|(digits, negative)| {
+            let room = DIGITS as usize - digits.len();
+            (Just(digits), 0..=room, Just(negative))
+          })
+          .prop_map(|(digits, zeros, negative)| {
+            let magnitude: BigInt = format!("{digits}{}", "0".repeat(zeros))
+              .parse()
+              .expect("ASCII digits");
+            let coeff = if negative && SIGNED {
+              -magnitude
+            } else {
+              magnitude
+            };
+            from_big(&coeff).expect("at most DIGITS digits fit")
+          })
+          .boxed()
+      }
+
       proptest! {
         #![proptest_config(config())]
 
@@ -613,6 +688,59 @@ macro_rules! suite {
           // A `+` sign is accepted, for every storage.
           prop_assert_eq!(format!("{a:+}").parse::<T>(), Ok(a));
           prop_assert_eq!(format!("{a:+0width$.precision$}").parse::<T>(), Ok(a));
+        }
+
+        #[test]
+        fn exp_matches_the_oracle(a in value(), precision in 0..(DIGITS as usize + 3)) {
+          prop_assert_eq!(
+            format!("{a:e}"),
+            oracle_exp_text(&big(a), FRACTION, 0, false)
+          );
+          prop_assert_eq!(
+            format!("{a:E}"),
+            oracle_exp_text(&big(a), FRACTION, 0, true)
+          );
+          prop_assert_eq!(
+            format!("{a:.precision$e}"),
+            oracle_exp_text(&big(a), FRACTION, precision, false)
+          );
+          prop_assert_eq!(
+            format!("{a:.precision$E}"),
+            oracle_exp_text(&big(a), FRACTION, precision, true)
+          );
+        }
+
+        #[test]
+        fn exp_text_round_trips(
+          a in value(),
+          precision in 0..(DIGITS as usize + 3),
+          width in 0usize..48,
+        ) {
+          prop_assert_eq!(T::parse(&format!("{a:e}")), Ok(a));
+          prop_assert_eq!(T::parse(&format!("{a:E}")), Ok(a));
+          prop_assert_eq!(format!("{a:.precision$e}").parse::<T>(), Ok(a));
+          prop_assert_eq!(format!("{a:.precision$E}").parse::<T>(), Ok(a));
+          // Zero padding goes after the sign, so the padded text is still valid input.
+          prop_assert_eq!(format!("{a:0width$.precision$e}").parse::<T>(), Ok(a));
+          // A `+` sign is accepted, for every storage.
+          prop_assert_eq!(format!("{a:+e}").parse::<T>(), Ok(a));
+          prop_assert_eq!(format!("{a:+0width$.precision$E}").parse::<T>(), Ok(a));
+        }
+
+        /// `f64` prints the shortest digits that read back as the same `f64`, and a decimal of at
+        /// most 15 significant digits is the shortest of its own `f64`, because decimals that
+        /// short are farther apart than the spacing of `f64`: the texts must be equal. The `f64`
+        /// is parsed from the decimal's text, which rounds correctly, where `powi` does not. From
+        /// 16 digits the digits differ: 9007199254740993 is 2^53 + 1, whose nearest `f64` is 2^53,
+        /// and prints as 9.007199254740992e15. Every exponent of a decimal is within the range of
+        /// the normal `f64`s, and the comparison has no precision, which `f64` rounds.
+        #[test]
+        fn exp_matches_f64_for_short_values(a in short_value()) {
+          let text = a.to_string();
+          prop_assert!(significant_digits(&text) <= 15);
+          let float: f64 = text.parse().expect("decimal text is a float");
+          prop_assert_eq!(format!("{a:e}"), format!("{float:e}"));
+          prop_assert_eq!(format!("{a:E}"), format!("{float:E}"));
         }
 
         #[test]

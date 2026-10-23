@@ -1,6 +1,6 @@
 use core::{
   any::TypeId,
-  fmt::{Debug, Display},
+  fmt::{Debug, Display, LowerExp, UpperExp},
   hash::{BuildHasher, Hash},
   ops::{Add, BitAnd, Sub},
   str::FromStr,
@@ -1224,6 +1224,400 @@ fn display_flags_with_fraction_digits() {
 }
 
 #[test]
+fn exp_shortest_form() {
+  for (coeff, text) in [
+    (0, "0e0"),
+    (1, "1e-2"),
+    (10, "1e-1"),
+    (100, "1e0"),
+    (1_230, "1.23e1"),
+    (1_234, "1.234e1"),
+    (-5, "-5e-2"),
+    (-100, "-1e0"),
+    (9_999, "9.999e1"),
+    (-9_999, "-9.999e1"),
+  ] {
+    let value = D2x2::from_repr(coeff).unwrap();
+    assert_eq!(format!("{value:e}"), text);
+    assert_eq!(format!("{value:E}"), text.replace('e', "E"));
+  }
+
+  assert_eq!(format!("{:e}", D2x0::from_repr(-7).unwrap()), "-7e0");
+  assert_eq!(format!("{:e}", D2x0::MAX), "9.9e1");
+  assert_eq!(format!("{:e}", D0x2::from_repr(5).unwrap()), "5e-2");
+  assert_eq!(format!("{:e}", D0x2::MIN), "-9.9e-1");
+  assert_eq!(format!("{:e}", D1x1::MIN), "-9.9e0");
+
+  let mantissa = format!("9.{}", nines(37));
+  assert_eq!(format!("{:e}", D19x19::MAX), format!("{mantissa}e18"));
+  assert_eq!(format!("{:e}", D19x19::MIN), format!("-{mantissa}e18"));
+  assert_eq!(format!("{:e}", D19x19::ONE), "1e0");
+  assert_eq!(format!("{:e}", D38x0::MIN), format!("-{mantissa}e37"));
+  assert_eq!(format!("{:e}", D0x38::from_repr(1).unwrap()), "1e-38");
+  assert_eq!(format!("{:e}", D0x38::MAX), format!("{mantissa}e-1"));
+
+  assert_eq!(
+    format!("{:e}", "64250.5".parse::<Price>().unwrap()),
+    "6.42505e4"
+  );
+  assert_eq!(
+    format!("{:e}", "0.00012".parse::<Price>().unwrap()),
+    "1.2e-4"
+  );
+  assert_eq!(format!("{:e}", "-3".parse::<Price>().unwrap()), "-3e0");
+  assert_eq!(format!("{:e}", "1200".parse::<Price>().unwrap()), "1.2e3");
+  assert_eq!(
+    format!("{:e}", "0.1".parse::<Decimal<U0, U1>>().unwrap()),
+    "1e-1"
+  );
+
+  // The text depends only on the value, not on the storage or the digit counts.
+  let narrow: Price = "-1234.5678".parse().unwrap();
+  let wide: WidePrice = narrow.widen();
+  let more_digits: Decimal<U12, U10> = narrow.widen();
+  assert_eq!(format!("{narrow:e}"), "-1.2345678e3");
+  assert_eq!(format!("{wide:e}"), format!("{narrow:e}"));
+  assert_eq!(format!("{more_digits:e}"), format!("{narrow:e}"));
+  assert_eq!(format!("{more_digits:E}"), "-1.2345678E3");
+}
+
+#[test]
+fn exp_precision_pads_but_never_rounds() {
+  let value = D2x2::from_repr(1_230).unwrap();
+  assert_eq!(format!("{value:.0e}"), "1.23e1");
+  assert_eq!(format!("{value:.1e}"), "1.23e1");
+  assert_eq!(format!("{value:.2e}"), "1.23e1");
+  assert_eq!(format!("{value:.5e}"), "1.23000e1");
+  assert_eq!(format!("{value:.5E}"), "1.23000E1");
+
+  // The primitive types round a precision below the digits of the mantissa, to even on a tie;
+  // `Decimal` writes every digit.
+  let digits = D5x4::from_repr(12_345).unwrap();
+  assert_eq!(format!("{digits:.2e}"), "1.2345e0");
+  assert_eq!(format!("{digits:.0e}"), "1.2345e0");
+  for (coeff, precision, text) in [
+    (1_250, 1, "1.25e3"),
+    (1_350, 1, "1.35e3"),
+    (15, 0, "1.5e1"),
+    (25, 0, "2.5e1"),
+  ] {
+    let value = D38x0::from_repr(coeff).unwrap();
+    assert_eq!(format!("{value:.precision$e}"), text);
+    assert_eq!(format!("{value:.precision$E}"), text.replace('e', "E"));
+  }
+
+  assert_eq!(format!("{:.2e}", D2x2::ZERO), "0.00e0");
+  assert_eq!(format!("{:.0e}", D2x2::ZERO), "0e0");
+  assert_eq!(format!("{:.3e}", D2x2::ONE), "1.000e0");
+  assert_eq!(format!("{:.0e}", D2x2::ONE), "1e0");
+  assert_eq!(format!("{:.3e}", D2x2::from_repr(-5).unwrap()), "-5.000e-2");
+  assert_eq!(format!("{:.4e}", D2x0::MAX), "9.9000e1");
+
+  let tiny = D2x2::from_repr(1).unwrap();
+  assert_eq!(format!("{tiny:.200e}"), format!("1.{}e-2", zeros(200)));
+  assert_eq!(
+    format!("{:.100e}", D19x19::MAX),
+    format!("9.{}{}e18", nines(37), zeros(63))
+  );
+}
+
+#[test]
+fn exp_zero_is_0e0_for_every_layout() {
+  // The digit writer gives zero a single `0`, so the exponent is not `-Fraction`.
+  assert_eq!(format!("{:e}", D2x2::ZERO), "0e0");
+  assert_eq!(format!("{:E}", D2x2::ZERO), "0E0");
+  assert_eq!(format!("{:e}", D2x0::ZERO), "0e0");
+  assert_eq!(format!("{:e}", D0x38::ZERO), "0e0");
+  assert_eq!(format!("{:e}", D38x0::ZERO), "0e0");
+  assert_eq!(format!("{:e}", D0x153::ZERO), "0e0");
+  assert_eq!(format!("{:e}", D154x0u512::ZERO), "0e0");
+  assert_eq!(format!("{:e}", D0x154u512::ZERO), "0e0");
+  assert_eq!(format!("{:e}", D2x2u16::ZERO), "0e0");
+
+  assert_eq!(format!("{:.2e}", D0x38::ZERO), "0.00e0");
+  assert_eq!(format!("{:.0E}", D0x38::ZERO), "0E0");
+  assert_eq!(format!("{:+e}", D0x38::ZERO), "+0e0");
+  assert_eq!(format!("{:010e}", D0x38::ZERO), "00000000e0");
+  assert_eq!(format!("{:+010.2E}", D0x38::ZERO), "+0000.00E0");
+  assert_eq!(format!("{:*^9e}", D0x154u512::ZERO), "***0e0***");
+}
+
+#[test]
+fn exp_flags_match_integers() {
+  // The primitive types round a precision below the fraction digits of their mantissa and
+  // `Decimal` never does, so a precision is compared only at and above those digits, which the
+  // primitive's own shortest text counts.
+  macro_rules! assert_same {
+    (@specs $decimal:ident, $value:ident, $($spec:tt),+ $(,)?) => {$(
+      assert_eq!(
+        format!($spec, $decimal),
+        format!($spec, $value),
+        "format {} of {}",
+        $spec,
+        $value
+      );
+    )+};
+    ($decimal:expr, $value:expr) => {{
+      let decimal = $decimal;
+      let value = $value;
+      assert_same!(
+        @specs decimal,
+        value,
+        "{:e}",
+        "{:E}",
+        "{:1e}",
+        "{:8e}",
+        "{:<8e}",
+        "{:^8E}",
+        "{:>8e}",
+        "{:^9e}",
+        "{:*<9E}",
+        "{:*^9e}",
+        "{:*>9E}",
+        "{:\u{e9}^10e}",
+        "{:+e}",
+        "{:+9E}",
+        "{:<+9e}",
+        "{:08e}",
+        "{:+08E}",
+        "{:<08e}",
+        "{:^08e}",
+        "{:x>+08E}",
+        "{:02e}",
+        "{:45e}",
+        "{:<45E}",
+        "{:^46e}",
+        "{:*>45E}",
+        "{:+045e}",
+        "{:045E}",
+        "{:#e}",
+        "{:#012E}",
+      );
+
+      let shortest = format!("{value:e}");
+      let (mantissa, _) = shortest.split_once('e').unwrap();
+      let digits = mantissa.split_once('.').map_or(0, |(_, fraction)| fraction.len());
+      for precision in [digits, digits + 1, digits + 7] {
+        assert_eq!(
+          format!("{decimal:.precision$e}"),
+          format!("{value:.precision$e}")
+        );
+        assert_eq!(
+          format!("{decimal:.precision$E}"),
+          format!("{value:.precision$E}")
+        );
+        assert_eq!(
+          format!("{decimal:+9.precision$e}"),
+          format!("{value:+9.precision$e}")
+        );
+        assert_eq!(
+          format!("{decimal:*^45.precision$E}"),
+          format!("{value:*^45.precision$E}")
+        );
+        assert_eq!(
+          format!("{decimal:+045.precision$e}"),
+          format!("{value:+045.precision$e}")
+        );
+      }
+    }};
+  }
+
+  for value in [-99i8, -42, -7, 0, 7, 42, 99] {
+    assert_same!(D2x0::from_repr(value).unwrap(), value);
+  }
+  for value in [
+    -MAX_38,
+    -1_000_000_000_000_000_000_000,
+    -12_345_678_901_234_567_890,
+    -1_250,
+    -1,
+    0,
+    1,
+    15,
+    25,
+    100,
+    1_250,
+    1_350,
+    10_000_000_000_000_000_000,
+    12_345_678_901_234_567_890_123_456_789_012_345_678,
+    MAX_38,
+  ] {
+    assert_same!(D38x0::from_repr(value).unwrap(), value);
+  }
+  for value in [
+    0u128,
+    1,
+    9,
+    10,
+    99,
+    100,
+    123_456_789,
+    100_000_000_000_000_000_000,
+    MAX_38_U128,
+  ] {
+    assert_same!(D38x0u128::from_repr(value).unwrap(), value);
+  }
+}
+
+#[test]
+fn exp_flags_with_fraction_digits() {
+  let value = D2x2::from_repr(-1_230).unwrap();
+  assert_eq!(format!("{value:10e}"), "   -1.23e1");
+  assert_eq!(format!("{value:>10e}"), "   -1.23e1");
+  assert_eq!(format!("{value:<10e}"), "-1.23e1   ");
+  assert_eq!(format!("{value:^10e}"), " -1.23e1  ");
+  assert_eq!(format!("{value:*^11e}"), "**-1.23e1**");
+  assert_eq!(format!("{value:^14E}"), "   -1.23E1    ");
+  assert_eq!(format!("{value:010e}"), "-0001.23e1");
+  assert_eq!(format!("{value:<010e}"), "-0001.23e1");
+  assert_eq!(format!("{value:012.4e}"), "-0001.2300e1");
+  assert_eq!(format!("{value:>12.3e}"), "    -1.230e1");
+
+  let positive = value.abs();
+  assert_eq!(format!("{positive:+e}"), "+1.23e1");
+  assert_eq!(format!("{positive:+010e}"), "+0001.23e1");
+  assert_eq!(format!("{positive:010e}"), "00001.23e1");
+  assert_eq!(format!("{positive:+.3e}"), "+1.230e1");
+  assert_eq!(format!("{:+e}", D2x2::ZERO), "+0e0");
+  assert_eq!(format!("{:+.1e}", D2x2::ZERO), "+0.0e0");
+
+  // `#` is ignored, as for the primitive types.
+  assert_eq!(format!("{positive:#e}"), "1.23e1");
+  assert_eq!(format!("{positive:#010E}"), "00001.23E1");
+
+  for spec_width in [70, 200] {
+    let padded = format!("{positive:0spec_width$e}");
+    assert_eq!(padded.len(), spec_width);
+    assert_eq!(padded, format!("{}1.23e1", zeros(spec_width - 6)));
+    let filled = format!("{positive:_>spec_width$E}");
+    assert_eq!(filled, format!("{}1.23E1", "_".repeat(spec_width - 6)));
+  }
+}
+
+/// Checks that `{:e}` writes `text` for `value`, and that the width counts that whole text,
+/// exponent included, under each alignment and the `0` flag, at widths below, at and above its
+/// length.
+fn assert_exp_padding<T: LowerExp + UpperExp>(value: T, text: &str) {
+  assert_eq!(format!("{value:e}"), text);
+  assert_eq!(format!("{value:E}"), text.replace('e', "E"));
+
+  let (sign, magnitude) = match text.strip_prefix('-') {
+    Some(magnitude) => ("-", magnitude),
+    None => ("", text),
+  };
+  for width in [
+    text.len() - 1,
+    text.len(),
+    text.len() + 1,
+    text.len() + 2,
+    text.len() + 9,
+  ] {
+    let padding = width.saturating_sub(text.len());
+    let before = " ".repeat(padding / 2);
+    let after = " ".repeat(padding - padding / 2);
+    for (padded, expected) in [
+      (
+        format!("{value:>width$e}"),
+        format!("{}{text}", " ".repeat(padding)),
+      ),
+      (
+        format!("{value:<width$e}"),
+        format!("{text}{}", " ".repeat(padding)),
+      ),
+      (
+        format!("{value:^width$e}"),
+        format!("{before}{text}{after}"),
+      ),
+      (
+        format!("{value:0width$e}"),
+        format!("{sign}{}{magnitude}", zeros(padding)),
+      ),
+    ] {
+      assert_eq!(padded.len(), width.max(text.len()), "{expected:?}");
+      assert_eq!(padded, expected);
+    }
+  }
+}
+
+#[test]
+fn exp_width_counts_the_whole_text() {
+  type D39x0 = Decimal<U39, U0>;
+
+  // Width 9 with each exponent text, `e0`, `e-1`, `e38`, `e-38`, `e153` and `e-154`: the right,
+  // left and center alignments, and the `0` flag.
+  macro_rules! assert_padded {
+    ($value:expr, [$right:literal, $left:literal, $center:literal, $zero:literal]) => {{
+      let value = $value;
+      assert_eq!(format!("{value:>9e}"), $right);
+      assert_eq!(format!("{value:<9e}"), $left);
+      assert_eq!(format!("{value:^9e}"), $center);
+      assert_eq!(format!("{value:09e}"), $zero);
+      for padded in [$right, $left, $center, $zero] {
+        assert_eq!(padded.len(), 9);
+      }
+    }};
+  }
+  assert_padded!(
+    D2x2::ONE,
+    ["      1e0", "1e0      ", "   1e0   ", "0000001e0"]
+  );
+  assert_padded!(
+    D2x2::from_repr(-10).unwrap(),
+    ["    -1e-1", "-1e-1    ", "  -1e-1  ", "-00001e-1"]
+  );
+  assert_padded!(
+    "1e38".parse::<D39x0>().unwrap(),
+    ["     1e38", "1e38     ", "  1e38   ", "000001e38"]
+  );
+  assert_padded!(
+    D0x38::from_repr(1).unwrap(),
+    ["    1e-38", "1e-38    ", "  1e-38  ", "00001e-38"]
+  );
+  assert_padded!(
+    "1e153".parse::<D154x0u512>().unwrap(),
+    ["    1e153", "1e153    ", "  1e153  ", "00001e153"]
+  );
+  assert_padded!(
+    "1e-154".parse::<D0x154u512>().unwrap(),
+    ["   1e-154", "1e-154   ", " 1e-154  ", "0001e-154"]
+  );
+
+  // Exponents of two to five bytes, in values with and without a sign, at widths below, at and
+  // above the length of the text.
+  assert_exp_padding(D2x2::ONE, "1e0");
+  assert_exp_padding(D2x2::from_repr(-10).unwrap(), "-1e-1");
+  assert_exp_padding("1e38".parse::<D39x0>().unwrap(), "1e38");
+  assert_exp_padding("-1e38".parse::<D39x0>().unwrap(), "-1e38");
+  assert_exp_padding(D0x38::from_repr(1).unwrap(), "1e-38");
+  assert_exp_padding(D0x38::from_repr(-1).unwrap(), "-1e-38");
+  assert_exp_padding("1e153".parse::<D154x0u512>().unwrap(), "1e153");
+  assert_exp_padding(D153x0::MIN, &format!("-9.{}e152", nines(152)));
+  assert_exp_padding("1e-154".parse::<D0x154u512>().unwrap(), "1e-154");
+  assert_exp_padding("-1e-153".parse::<D0x153>().unwrap(), "-1e-153");
+
+  // A mantissa with a fraction, with a long exponent text.
+  assert_exp_padding(D154x0u512::MAX, &format!("9.{}e153", nines(153)));
+  assert_exp_padding("1.5e-153".parse::<D0x154u512>().unwrap(), "1.5e-153");
+  assert_exp_padding(D2x2::ZERO, "0e0");
+}
+
+#[test]
+fn exp_needs_the_bounds_of_display() {
+  fn layout_traits<I, F, R>()
+  where
+    R: Storage,
+    (I, F): Layout<R>,
+  {
+    fn assert<T: Display + LowerExp + UpperExp>() {}
+    assert::<Decimal<I, F, R>>();
+  }
+
+  layout_traits::<U10, U8, i64>();
+  layout_traits::<U10, U9, u64>();
+  layout_traits::<U60, U18, u320>();
+}
+
+#[test]
 fn exact_mul() {
   let price: Price = "64250.5".parse().unwrap();
   let quantity: Quantity = "-0.0015".parse().unwrap();
@@ -1700,6 +2094,40 @@ fn unsigned_display() {
 }
 
 #[test]
+fn unsigned_exp() {
+  for (coeff, text) in [
+    (0, "0e0"),
+    (1, "1e-2"),
+    (10, "1e-1"),
+    (100, "1e0"),
+    (1_230, "1.23e1"),
+    (9_999, "9.999e1"),
+  ] {
+    let value = D2x2u16::from_repr(coeff).unwrap();
+    assert_eq!(format!("{value:e}"), text);
+    assert_eq!(format!("{value:E}"), text.replace('e', "E"));
+  }
+
+  let value = D2x2u16::from_repr(125).unwrap();
+  assert_eq!(format!("{value:+e}"), "+1.25e0");
+  assert_eq!(format!("{:+e}", D2x2u16::ZERO), "+0e0");
+  assert_eq!(format!("{value:+010.3e}"), "+001.250e0");
+  assert_eq!(format!("{value:010e}"), "00001.25e0");
+  assert_eq!(format!("{value:>9e}"), "   1.25e0");
+
+  assert_eq!(format!("{:e}", D10x9u64::MAX), format!("9.{}e9", nines(18)));
+  assert_eq!(
+    format!("{:e}", D19x0u64::MAX),
+    format!("9.{}e18", nines(18))
+  );
+  assert_eq!(
+    format!("{:e}", D38x0u128::MAX),
+    format!("9.{}e37", nines(37))
+  );
+  assert_eq!(format!("{:e}", D19x19u128::from_repr(1).unwrap()), "1e-19");
+}
+
+#[test]
 fn exact_mul_storage_follows_the_operand_signs() {
   // Two unsigned operands give the smallest unsigned storage.
   let both: Decimal<U2, U2, u16> = D1x1u8::MAX.exact_mul(D1x1u8::MAX);
@@ -2132,6 +2560,64 @@ fn wide_parse_and_display_at_the_limits() {
   assert_eq!(
     format!("{:>160}", D153x0::MIN),
     format!("{:>160}", format!("-{}", nines(153)))
+  );
+}
+
+#[test]
+fn wide_exp_at_the_limits() {
+  // The exponent runs from -154, the last place of 154 fraction digits, to 153, the first of 154
+  // integral digits.
+  let max = format!("9.{}", nines(153));
+  assert_eq!(format!("{:e}", D154x0u512::MAX), format!("{max}e153"));
+  assert_eq!(format!("{:E}", D154x0u512::MAX), format!("{max}E153"));
+  assert_eq!(format!("{:e}", D0x154u512::MAX), format!("{max}e-1"));
+  let last_place: D0x154u512 = "1e-154".parse().unwrap();
+  assert_eq!(last_place.to_string(), format!("0.{}1", zeros(153)));
+  assert_eq!(format!("{last_place:e}"), "1e-154");
+  assert_eq!(format!("{last_place:E}"), "1E-154");
+  assert_eq!(format!("{:e}", D154x0u512::ONE), "1e0");
+
+  let max = format!("9.{}", nines(152));
+  assert_eq!(format!("{:e}", D153x0::MIN), format!("-{max}e152"));
+  assert_eq!(format!("{:e}", D153x0::MAX), format!("{max}e152"));
+  assert_eq!(format!("{:e}", D0x153::MIN), format!("-{max}e-1"));
+  let unit: D0x153 = "1e-153".parse().unwrap();
+  assert_eq!(unit.to_string(), format!("0.{}1", zeros(152)));
+  assert_eq!(format!("{unit:e}"), "1e-153");
+  assert_eq!(format!("{:e}", -unit), "-1e-153");
+
+  // The text reads back at the limits, with a sign, a precision and zero padding.
+  for value in [D154x0u512::MAX, D154x0u512::ONE, D154x0u512::ZERO] {
+    assert_eq!(format!("{value:e}").parse::<D154x0u512>(), Ok(value));
+    assert_eq!(format!("{value:+e}").parse::<D154x0u512>(), Ok(value));
+    assert_eq!(format!("{value:0170.10E}").parse::<D154x0u512>(), Ok(value));
+  }
+  for value in [D0x154u512::MAX, last_place, D0x154u512::ZERO] {
+    assert_eq!(format!("{value:e}").parse::<D0x154u512>(), Ok(value));
+    assert_eq!(format!("{value:+e}").parse::<D0x154u512>(), Ok(value));
+    assert_eq!(format!("{value:0170.10E}").parse::<D0x154u512>(), Ok(value));
+  }
+  for value in [D153x0::MIN, D153x0::MAX, -D153x0::ONE] {
+    assert_eq!(format!("{value:e}").parse::<D153x0>(), Ok(value));
+    assert_eq!(format!("{value:0170.10E}").parse::<D153x0>(), Ok(value));
+  }
+  for value in [D0x153::MIN, D0x153::MAX, unit] {
+    assert_eq!(format!("{value:e}").parse::<D0x153>(), Ok(value));
+    assert_eq!(format!("{value:0170.10E}").parse::<D0x153>(), Ok(value));
+  }
+
+  // Wide storages of other sizes.
+  assert_eq!(format!("{:e}", D96x0::MAX), format!("9.{}e95", nines(95)));
+  assert_eq!(format!("{:e}", D0x96::MAX), format!("9.{}e-1", nines(95)));
+  let amount: TokenAmount = "18446744073709551621e-18".parse().unwrap();
+  assert_eq!(format!("{amount:e}"), "1.8446744073709551621e1");
+  let largest: TokenAmount =
+    "115792089237316195423570985008687907853269984665640564039457584007913129639935e-18"
+      .parse()
+      .unwrap();
+  assert_eq!(
+    format!("{largest:e}"),
+    "1.15792089237316195423570985008687907853269984665640564039457584007913129639935e59"
   );
 }
 

@@ -3,6 +3,11 @@ use core::fmt::{self, Alignment, Formatter, Write};
 /// Zeros written in chunks, so padding and precision need no buffer of their size.
 const ZEROS: &str = "0000000000000000000000000000000000000000000000000000000000000000";
 
+/// Bytes of the longest exponent text, `e-154`: the marker, a sign and three digits. A coefficient
+/// has between 1 and 154 digits and a decimal at most 154 fraction digits, so the exponent of any
+/// decimal is between -154 and 153.
+const EXPONENT_LEN: usize = 5;
+
 /// The pieces of the text of a decimal, in output order.
 struct Parts<'a> {
   sign: Option<char>,
@@ -14,6 +19,8 @@ struct Parts<'a> {
   fraction: &'a str,
   /// Zeros after `fraction` requested by the precision.
   trailing_zeros: usize,
+  /// The marker and value of the exponent of scientific notation, as in `e-4`, after the digits.
+  exponent: Option<&'a str>,
 }
 
 impl Parts<'_> {
@@ -32,6 +39,7 @@ impl Parts<'_> {
     usize::from(self.sign.is_some())
       .saturating_add(self.integral.len())
       .saturating_add(point)
+      .saturating_add(self.exponent.map_or(0, str::len))
   }
 
   fn write_sign(&self, f: &mut Formatter<'_>) -> fmt::Result {
@@ -48,6 +56,9 @@ impl Parts<'_> {
       write_zeros(f, self.leading_zeros)?;
       f.write_str(self.fraction)?;
       write_zeros(f, self.trailing_zeros)?;
+    }
+    if let Some(exponent) = self.exponent {
+      f.write_str(exponent)?;
     }
     Ok(())
   }
@@ -100,8 +111,13 @@ pub(super) fn write(
     leading_zeros,
     fraction: ascii(fraction_digits)?,
     trailing_zeros,
+    exponent: None,
   };
+  write_parts(f, &parts)
+}
 
+/// Writes `parts` with the width, fill, alignment and `0` flag of `f`.
+fn write_parts(f: &mut Formatter<'_>, parts: &Parts<'_>) -> fmt::Result {
   let padding = match f.width() {
     Some(width) => width.saturating_sub(parts.len()),
     None => 0,
@@ -129,7 +145,85 @@ pub(super) fn write(
   write_fill(f, fill, after)
 }
 
-/// Views digits produced by the integer core, which are always ASCII, as a string.
+/// Writes a decimal whose magnitude has the ASCII digits `digits`, as for `write`, in scientific
+/// notation, with `marker` (`e` or `E`) between the mantissa and the exponent.
+///
+/// The mantissa has the significant digits, the first before the point. The exponent is the place
+/// of the first digit, `digits.len() - 1 - fraction`, and is 0 for zero, whatever `fraction` is.
+/// Sign and padding are as for `write`, over the whole text, exponent included. The precision is
+/// the minimum number of mantissa fraction digits, so it never rounds.
+pub(super) fn write_exp(
+  f: &mut Formatter<'_>,
+  negative: bool,
+  digits: &[u8],
+  fraction: usize,
+  marker: u8,
+) -> fmt::Result {
+  let (first, rest) = digits.split_at_checked(1).ok_or(fmt::Error)?;
+  let significant_len = rest
+    .iter()
+    .rposition(|&digit| digit != b'0')
+    .map_or(0, |last| last + 1);
+  let rest = &rest[..significant_len];
+  // The digit writer gives zero a single `0`, which the formula would put at `-fraction`.
+  let exponent = if digits == b"0" {
+    0
+  } else {
+    digits.len() as i32 - 1 - fraction as i32
+  };
+  let trailing_zeros = f
+    .precision()
+    .map_or(0, |precision| precision.saturating_sub(rest.len()));
+
+  let sign = if negative {
+    Some('-')
+  } else if f.sign_plus() {
+    Some('+')
+  } else {
+    None
+  };
+
+  // The exponent is formatted once, here, so that the width counts the bytes that are written.
+  let mut exponent_buf = [0; EXPONENT_LEN];
+  let parts = Parts {
+    sign,
+    integral: ascii(first)?,
+    leading_zeros: 0,
+    fraction: ascii(rest)?,
+    trailing_zeros,
+    exponent: Some(exponent_text(&mut exponent_buf, marker, exponent)?),
+  };
+  write_parts(f, &parts)
+}
+
+/// Writes `marker` and `exponent`, as in `e-4`, to the end of `buf` and returns them as a string.
+/// Requires `-154 <= exponent <= 153`, so that they fit.
+fn exponent_text(
+  buf: &mut [u8; EXPONENT_LEN],
+  marker: u8,
+  exponent: i32,
+) -> Result<&str, fmt::Error> {
+  let mut start = EXPONENT_LEN;
+  let mut magnitude = exponent.unsigned_abs();
+  loop {
+    start -= 1;
+    buf[start] = b'0' + (magnitude % 10) as u8;
+    magnitude /= 10;
+    if magnitude == 0 {
+      break;
+    }
+  }
+  if exponent < 0 {
+    start -= 1;
+    buf[start] = b'-';
+  }
+  start -= 1;
+  buf[start] = marker;
+  ascii(&buf[start..])
+}
+
+/// Views bytes that are always ASCII, such as the digits produced by the integer core, as a
+/// string.
 fn ascii(digits: &[u8]) -> Result<&str, fmt::Error> {
   core::str::from_utf8(digits).map_err(|_| fmt::Error)
 }
