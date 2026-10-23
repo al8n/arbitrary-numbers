@@ -5,8 +5,9 @@ use num_bigint::BigInt;
 
 use super::{
   abs, checked_add, checked_from_unsigned, checked_mul_pow10, checked_resize, checked_sub,
-  checked_to_unsigned, cmp, div_rem, div_rem_pow10, is_negative, is_positive, is_zero, le, mul,
-  mul_pow10, neg, push_digits, resize, round_div, unsigned_abs, write_digits,
+  checked_to_unsigned, cmp, div_rem, div_rem_pow10, fits_bits, is_negative, is_positive, is_zero,
+  le, max_of_bits, min_of_bits, mul, mul_pow10, neg, push_digits, resize, round_div, sign_extend,
+  unsigned_abs, write_digits,
 };
 use crate::{bigint, int::DIGIT_BUF_LEN};
 
@@ -473,4 +474,86 @@ fn rounding_division_matches_rounding_by_distance() {
   rounding_division::<2>();
   rounding_division::<3>();
   rounding_division::<8>();
+}
+
+/// The widths at which the functions of a width are checked: 1, 63, 64, 65, `64N - 1` and `64N`,
+/// those that `N` limbs hold.
+fn widths<const N: usize>() -> Vec<u32> {
+  let top = 64 * N as u32;
+  let mut widths: Vec<u32> = [1, 63, 64, 65, top - 1, top]
+    .into_iter()
+    .filter(|&width| width <= top)
+    .collect();
+  widths.sort_unstable();
+  widths.dedup();
+  widths
+}
+
+fn widths_against_big_integers<const N: usize>() {
+  let widths = widths::<N>();
+  let patterns = bigint::bit_patterns::<N>(&widths);
+  let values: Vec<(BigInt, BigInt)> = patterns
+    .iter()
+    .map(|pattern| {
+      (
+        bigint::from_limbs(pattern, true),
+        bigint::from_limbs(pattern, false),
+      )
+    })
+    .collect();
+  for &bits in &widths {
+    let (min, max) = (bigint::min(bits, true), bigint::max(bits, true));
+    assert_eq!(bigint::from_limbs(&max_of_bits::<N>(bits), true), max);
+    assert_eq!(bigint::from_limbs(&min_of_bits::<N>(bits), true), min);
+    let modulus = BigInt::from(1u8) << bits;
+    for (pattern, (value, unsigned)) in patterns.iter().zip(&values) {
+      assert_eq!(
+        fits_bits(pattern, bits),
+        min <= *value && *value <= max,
+        "{pattern:x?} in {bits} bits"
+      );
+      // The two's complement integer in the low `bits` bits.
+      let low = unsigned % &modulus;
+      let expected = if low > max { low - &modulus } else { low };
+      assert_eq!(
+        bigint::from_limbs(&sign_extend(pattern, bits), true),
+        expected,
+        "{pattern:x?} from {bits} bits"
+      );
+    }
+  }
+}
+
+#[test]
+#[cfg_attr(
+  all(miri, target_pointer_width = "32"),
+  ignore = "Miri on 32-bit targets runs out of addresses in num-bigint allocations"
+)]
+fn widths_match_big_integers() {
+  widths_against_big_integers::<1>();
+  widths_against_big_integers::<2>();
+  widths_against_big_integers::<3>();
+  widths_against_big_integers::<4>();
+  widths_against_big_integers::<8>();
+  widths_against_big_integers::<16>();
+  widths_against_big_integers::<64>();
+}
+
+/// The magnitude of `-2^4095`, the smallest value of 4096 bits, has 1233 digits.
+#[test]
+#[cfg_attr(
+  all(miri, target_pointer_width = "32"),
+  ignore = "Miri on 32-bit targets runs out of addresses in num-bigint allocations"
+)]
+fn digits_of_the_smallest_value_of_64_limbs() {
+  let min = min_of_bits::<64>(4096);
+  let mut buf = [0; 1233];
+  assert_eq!(
+    crate::int::limbs::write_digits_into(&unsigned_abs(&min), &mut buf),
+    0
+  );
+  assert_eq!(
+    &buf[..],
+    (-bigint::from_limbs(&min, true)).to_string().as_bytes()
+  );
 }

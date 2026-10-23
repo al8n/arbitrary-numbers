@@ -362,7 +362,6 @@ macro_rules! wide_tests {
           assert_eq!(wide::is_positive(a), big_a.sign() == Sign::Plus);
           wide_tests!(@is_negative $sign a, big_a);
           for &(b, ref big_b) in &samples {
-            assert_eq!(wide::cmp(a, b), big_a.cmp(big_b));
             assert_eq!(wide::le(a, b), big_a <= big_b);
           }
         }

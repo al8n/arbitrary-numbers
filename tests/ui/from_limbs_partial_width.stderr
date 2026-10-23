@@ -1,0 +1,49 @@
+error[E0277]: `Bits` does not fill the storage
+ --> tests/ui/from_limbs_partial_width.rs:8:16
+  |
+8 |   let _value = Uint::<U200, [u64; 4]>::from_limbs([0; 4]);
+  |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `Bits` is less than the bits of the storage
+  |
+  = help: the trait `numo::width::sealed::ReprFilled` is not implemented for `B0`
+  = note: `[u64; N]` holds `64 * N` bits
+  = note: `checked_from_limbs` takes the limbs of any width that fits and checks the value
+help: the trait `numo::width::sealed::ReprFilled` is implemented for `B1`
+ --> src/width.rs
+  |
+  |   impl ReprFilled for typenum::B1 {}
+  |   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  = note: required for `UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UTerm, B1>, B1>, B0>, B0>, B1>, B0>, B0>, B0>` to implement `numo::width::sealed::SealedFillsRepr<[u64; 4]>`
+  = note: required for `UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UTerm, B1>, B1>, B0>, B0>, B1>, B0>, B0>, B0>` to implement `FillsRepr<[u64; 4]>`
+note: required by a bound in `Uint::<B, [u64; N]>::from_limbs`
+ --> src/integer.rs
+  |
+  |   pub const fn from_limbs(limbs: [u64; N]) -> Self
+  |                ---------- required by a bound in this associated function
+  |   where
+  |     B: FillsRepr<[u64; N]>,
+  |        ^^^^^^^^^^^^^^^^^^^ required by this bound in `Uint::<B, [u64; N]>::from_limbs`
+
+error[E0277]: `Bits` does not fill the storage
+ --> tests/ui/from_limbs_partial_width.rs:9:16
+  |
+9 |   let _value = Int::<U7, [u64; 1]>::from_limbs([0]);
+  |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `Bits` is less than the bits of the storage
+  |
+  = help: the trait `numo::width::sealed::ReprFilled` is not implemented for `B0`
+  = note: `[u64; N]` holds `64 * N` bits
+  = note: `checked_from_limbs` takes the limbs of any width that fits and checks the value
+help: the trait `numo::width::sealed::ReprFilled` is implemented for `B1`
+ --> src/width.rs
+  |
+  |   impl ReprFilled for typenum::B1 {}
+  |   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  = note: required for `UInt<UInt<UInt<UTerm, B1>, B1>, B1>` to implement `numo::width::sealed::SealedFillsRepr<[u64; 1]>`
+  = note: required for `UInt<UInt<UInt<UTerm, B1>, B1>, B1>` to implement `FillsRepr<[u64; 1]>`
+note: required by a bound in `numo::Int::<B, [u64; N]>::from_limbs`
+ --> src/integer.rs
+  |
+  |   pub const fn from_limbs(limbs: [u64; N]) -> Self
+  |                ---------- required by a bound in this associated function
+  |   where
+  |     B: FillsRepr<[u64; N]>,
+  |        ^^^^^^^^^^^^^^^^^^^ required by this bound in `Int::<B, [u64; N]>::from_limbs`

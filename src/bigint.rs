@@ -1,11 +1,11 @@
 //! Helpers for the unit tests that compare with `num-bigint`: conversions between limb arrays and
-//! big integers, the limits and powers of ten that they test, rounding by distance, and fewer
-//! samples and exponents under Miri.
+//! big integers, the limits, powers of ten and bit patterns that they test, rounding by distance,
+//! and fewer samples, exponents and bit indexes under Miri.
 
 use core::cmp::Ordering;
 
 use num_bigint::{BigInt, Sign};
-use std::vec::Vec;
+use std::{vec, vec::Vec};
 
 use crate::RoundingMode;
 
@@ -148,4 +148,42 @@ pub(crate) fn exponents(max_exp: u32) -> Vec<u32> {
 pub(crate) fn thin<T>(samples: Vec<T>) -> Vec<T> {
   let step = if cfg!(miri) { 3 } else { 1 };
   samples.into_iter().step_by(step).collect()
+}
+
+/// Bit patterns of `N` limbs: zero, all ones, and for each bit index `k`, bit `k` alone, every bit
+/// but `k`, every bit below `k`, and every bit from `k` up.
+///
+/// Every index is swept, or under Miri only the indexes next to the first limb boundary, to the
+/// top bit and to each of `widths`, which give the limits of those widths and the patterns just
+/// beyond them.
+pub(crate) fn bit_patterns<const N: usize>(widths: &[u32]) -> Vec<[u64; N]> {
+  let bits = 64 * N as u32;
+  let indexes: Vec<u32> = if cfg!(miri) {
+    let mut indexes = vec![0, 1, 63, 64, 65, bits - 2, bits - 1];
+    for &width in widths {
+      indexes.extend([
+        width.saturating_sub(2),
+        width.saturating_sub(1),
+        width,
+        width + 1,
+      ]);
+    }
+    indexes.retain(|&index| index < bits);
+    indexes.sort_unstable();
+    indexes.dedup();
+    indexes
+  } else {
+    (0..bits).collect()
+  };
+  let mut patterns = vec![[0; N], [u64::MAX; N]];
+  for index in indexes {
+    let (limb, bit) = ((index / 64) as usize, index % 64);
+    let mut single = [0; N];
+    single[limb] = 1 << bit;
+    let mut below = [0; N];
+    below[..limb].fill(u64::MAX);
+    below[limb] = (1 << bit) - 1;
+    patterns.extend([single, single.map(|l| !l), below, below.map(|l| !l)]);
+  }
+  patterns
 }

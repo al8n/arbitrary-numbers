@@ -409,11 +409,6 @@ macro_rules! wide {
     }
 
     #[inline]
-    pub(crate) const fn cmp(lhs: $ty, rhs: $ty) -> core::cmp::Ordering {
-      $layer::cmp(lhs.as_limbs(), rhs.as_limbs())
-    }
-
-    #[inline]
     pub(crate) const fn le(lhs: $ty, rhs: $ty) -> bool {
       $layer::le(lhs.as_limbs(), rhs.as_limbs())
     }

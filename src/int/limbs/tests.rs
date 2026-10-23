@@ -5,8 +5,8 @@ use num_bigint::BigInt;
 
 use super::{
   checked_add, checked_mul_pow10, checked_resize, checked_sub, cmp, div_rem, div_rem_pow10,
-  is_positive, is_zero, le, max_magnitude, mul, mul_pow10, overflowing_add, overflowing_sub, pow10,
-  push_digits, resize, round_div, write_digits,
+  fits_bits, is_positive, is_zero, le, max_magnitude, max_of_bits, mul, mul_pow10, overflowing_add,
+  overflowing_sub, pow10, push_digits, resize, round_div, write_digits, write_digits_into,
 };
 use crate::{bigint, int::DIGIT_BUF_LEN};
 
@@ -610,4 +610,96 @@ fn rounding_division_matches_rounding_by_distance() {
   rounding_division::<3>();
   rounding_division::<5>();
   rounding_division::<8>();
+}
+
+/// The widths at which the functions of a width are checked: 1, 63, 64, 65, `64N - 1` and `64N`,
+/// those that `N` limbs hold.
+fn widths<const N: usize>() -> Vec<u32> {
+  let top = 64 * N as u32;
+  let mut widths: Vec<u32> = [1, 63, 64, 65, top - 1, top]
+    .into_iter()
+    .filter(|&width| width <= top)
+    .collect();
+  widths.sort_unstable();
+  widths.dedup();
+  widths
+}
+
+fn widths_against_big_integers<const N: usize>() {
+  let widths = widths::<N>();
+  let patterns = bigint::bit_patterns::<N>(&widths);
+  let values: Vec<BigInt> = patterns
+    .iter()
+    .map(|pattern| bigint::from_limbs(pattern, false))
+    .collect();
+  for &bits in &widths {
+    let max = bigint::max(bits, false);
+    assert_eq!(bigint::from_limbs(&max_of_bits::<N>(bits), false), max);
+    for (pattern, value) in patterns.iter().zip(&values) {
+      assert_eq!(
+        fits_bits(pattern, bits),
+        *value <= max,
+        "{pattern:x?} in {bits} bits"
+      );
+    }
+  }
+  assert_eq!(max_of_bits::<N>(0), [0; N]);
+}
+
+#[test]
+#[cfg_attr(
+  all(miri, target_pointer_width = "32"),
+  ignore = "Miri on 32-bit targets runs out of addresses in num-bigint allocations"
+)]
+fn widths_match_big_integers() {
+  widths_against_big_integers::<1>();
+  widths_against_big_integers::<2>();
+  widths_against_big_integers::<3>();
+  widths_against_big_integers::<4>();
+  widths_against_big_integers::<8>();
+  widths_against_big_integers::<16>();
+  widths_against_big_integers::<64>();
+}
+
+fn digits_into_a_slice<const N: usize>() {
+  let mut patterns = vec![[0; N], [u64::MAX; N]];
+  // Each limb boundary, or under Miri, which divides many limbs slowly, only the top one.
+  let boundaries = if cfg!(miri) { N - 1..N } else { 0..N };
+  for k in boundaries {
+    patterns.extend([boundary::<N>(k), ones_below::<N>(k + 1)]);
+  }
+  for pattern in patterns {
+    let expected = bigint::from_limbs(&pattern, false).to_string();
+    // `20 * N` bytes hold every value, and so do exactly as many bytes as there are digits.
+    let mut buf = vec![0xff; 20 * N];
+    let start = write_digits_into(&pattern, &mut buf);
+    assert_eq!(&buf[start..], expected.as_bytes());
+    let mut exact = vec![0xff; expected.len()];
+    assert_eq!(write_digits_into(&pattern, &mut exact), 0);
+    assert_eq!(exact, expected.as_bytes());
+  }
+}
+
+#[test]
+#[cfg_attr(
+  all(miri, target_pointer_width = "32"),
+  ignore = "Miri on 32-bit targets runs out of addresses in num-bigint allocations"
+)]
+fn digits_into_a_slice_for_every_width() {
+  digits_into_a_slice::<1>();
+  digits_into_a_slice::<2>();
+  digits_into_a_slice::<3>();
+  digits_into_a_slice::<4>();
+  digits_into_a_slice::<8>();
+  digits_into_a_slice::<16>();
+  digits_into_a_slice::<64>();
+  // `2^4096 - 1` has 1234 digits.
+  let mut buf = [0; 1234];
+  assert_eq!(write_digits_into(&[u64::MAX; 64], &mut buf), 0);
+  assert_eq!(
+    &buf[..],
+    bigint::from_limbs(&[u64::MAX; 64], false)
+      .to_string()
+      .as_bytes()
+  );
 }

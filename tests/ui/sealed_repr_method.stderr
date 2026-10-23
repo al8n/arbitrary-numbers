@@ -1,0 +1,15 @@
+error[E0061]: this method takes 2 arguments but 1 argument was supplied
+ --> tests/ui/sealed_repr_method.rs:6:23
+  |
+6 |   let _ordering = lhs.compare(rhs);
+  |                       ^^^^^^^----- argument #2 of type `numo::layout::sealed::Token` is missing
+  |
+note: method defined here
+ --> src/width.rs
+  |
+  |     fn compare(&self, other: &Self, token: Token) -> Ordering;
+  |        ^^^^^^^
+help: provide the argument
+  |
+6 |   let _ordering = lhs.compare(rhs, /* Token */);
+  |                                  +++++++++++++

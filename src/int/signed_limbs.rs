@@ -306,6 +306,55 @@ pub(crate) const fn checked_resize<const N: usize, const M: usize>(
   }
 }
 
+/// `value` with every bit at index `bits - 1` or above set to bit `bits - 1`: the two's complement
+/// integer of `bits` bits in the low bits of `value`, sign-extended to `N` limbs. Requires
+/// `1 <= bits <= 64N`.
+pub(crate) const fn sign_extend<const N: usize>(value: &[u64; N], bits: u32) -> [u64; N] {
+  let top = ((bits - 1) / 64) as usize;
+  // Shifting bit `bits - 1` to the top of its limb and back with an arithmetic shift copies it into
+  // the bits above.
+  let shift = 63 - (bits - 1) % 64;
+  let mut extended = *value;
+  extended[top] = (((value[top] << shift) as i64) >> shift) as u64;
+  let fill = if (extended[top] as i64) < 0 {
+    u64::MAX
+  } else {
+    0
+  };
+  let mut i = top + 1;
+  while i < N {
+    extended[i] = fill;
+    i += 1;
+  }
+  extended
+}
+
+/// Returns `true` if `value` is within the range of `bits` bits, from `-2^(bits - 1)` to
+/// `2^(bits - 1) - 1`. Requires `1 <= bits <= 64N`.
+#[inline]
+pub(crate) const fn fits_bits<const N: usize>(value: &[u64; N], bits: u32) -> bool {
+  // Sign-extending from bit `bits - 1` changes only a value outside the range.
+  limbs::eq(&sign_extend(value, bits), value)
+}
+
+/// `2^(bits - 1) - 1`, the largest value of `bits` bits. Requires `1 <= bits <= 64N`.
+#[inline]
+pub(crate) const fn max_of_bits<const N: usize>(bits: u32) -> [u64; N] {
+  limbs::max_of_bits(bits - 1)
+}
+
+/// `-2^(bits - 1)`, the smallest value of `bits` bits. Requires `1 <= bits <= 64N`.
+pub(crate) const fn min_of_bits<const N: usize>(bits: u32) -> [u64; N] {
+  // Every bit from index `bits - 1` up is set, and every bit below it is clear.
+  let mut min = max_of_bits::<N>(bits);
+  let mut i = 0;
+  while i < N {
+    min[i] = !min[i];
+    i += 1;
+  }
+  min
+}
+
 /// The unsigned integer `value` in `M` limbs of two's complement, or `None` if it is not
 /// representable.
 pub(crate) const fn checked_from_unsigned<const N: usize, const M: usize>(
