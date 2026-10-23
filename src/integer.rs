@@ -16,23 +16,26 @@ use crate::{
 /// An unsigned integer of `Bits` bits, stored in `Repr`.
 ///
 /// The value runs from zero to `2^Bits - 1`. `Bits` is a [`typenum`] number of at least 1, and
-/// `Repr` is an array `[u64; N]` of 64-bit limbs, least significant first, that holds at least
-/// `Bits` bits; the bits above `Bits`, if any, are zero. The module [`aliases`](crate::aliases)
-/// names common widths, such as [`u256`](crate::u256) for `Uint<U256, [u64; 4]>`. The type has the
-/// size, alignment and ABI of `Repr`.
+/// `Repr` is an array of limbs, least significant first, that holds at least `Bits` bits:
+/// `[u8; N]`, `[u16; N]`, `[u32; N]` or `[u64; N]`, of `8 * N`, `16 * N`, `32 * N` or `64 * N`
+/// bits. The bits above `Bits`, if any, are zero. `[u64; N]` is the fastest storage on 64-bit
+/// targets and the storage of the module [`aliases`](crate::aliases), which names common widths,
+/// such as [`u256`](crate::u256) for `Uint<U256, [u64; 4]>`; `[u32; N]` suits 32-bit targets, and
+/// `[u8; N]` has alignment 1 and holds the little-endian bytes of the value on every target. The
+/// type has the size, alignment and ABI of `Repr`.
 ///
 /// [`from_limbs`](Self::from_limbs) creates a value from any bit pattern of a width that fills its
 /// limbs, and [`checked_from_limbs`](Self::checked_from_limbs) from the limbs of any width, checking
 /// that they hold a value of `Bits` bits. Values compare, hash and format by their numeric value:
-/// `Ord` is numeric, `Hash` depends only on the value and `Bits`, and `Display` and `Debug` write
-/// decimal. There is no arithmetic.
+/// `Ord` is numeric, `Hash` depends only on the value and `Bits`, whatever the storage, and
+/// `Display` and `Debug` write decimal. There is no arithmetic.
 ///
 /// The aliases from 192 to 512 bits are the wide storages of [`Decimal`](crate::Decimal):
 ///
 /// ```
 /// use numo::{
 ///   Decimal, Uint,
-///   typenum::{U18, U59, U200},
+///   typenum::{U18, U24, U59, U200},
 ///   u256,
 /// };
 ///
@@ -55,10 +58,16 @@ use crate::{
 /// // 2^64 + 5 units of 10^-18.
 /// let amount = Decimal::<U59, U18, u256>::from_repr(value).unwrap();
 /// assert_eq!(amount.to_string(), "18.446744073709551621");
+///
+/// // 24 bits in three bytes, least significant first: 1 + 2 * 2^8 + 3 * 2^16.
+/// let bytes = Uint::<U24, [u8; 3]>::from_limbs([1, 2, 3]);
+/// assert_eq!(bytes.to_string(), "197121");
+/// assert_eq!(Uint::<U24, [u8; 3]>::MAX.to_limbs(), [u8::MAX; 3]);
 /// ```
 ///
-/// The width cannot be inferred from the limbs, so construction names the alias or the full type,
-/// for example `u256::from_limbs(limbs)` or `Uint::<U200, [u64; 4]>::checked_from_limbs(limbs)`.
+/// The width cannot be inferred from the limbs, nor the storage from the expected type, so
+/// construction names the alias or the full type, for example `u256::from_limbs(limbs)` or
+/// `Uint::<U200, [u64; 4]>::checked_from_limbs(limbs)`.
 #[repr(transparent)]
 pub struct Uint<Bits, Repr> {
   // Holds a value of `Bits` bits: every bit of the limbs at index `Bits` or above is zero, so the
@@ -72,11 +81,11 @@ pub struct Uint<Bits, Repr> {
 /// A signed integer of `Bits` bits in two's complement, stored in `Repr`.
 ///
 /// The value runs from `-2^(Bits - 1)` to `2^(Bits - 1) - 1`. `Bits` is a [`typenum`] number of at
-/// least 1, and `Repr` is an array `[u64; N]` of 64-bit limbs, least significant first, that holds
-/// at least `Bits` bits; the bits above `Bits`, if any, are copies of the sign bit, so the limbs
-/// hold the value in two's complement. The module [`aliases`](crate::aliases) names common widths,
-/// such as [`i256`](crate::i256) for `Int<U256, [u64; 4]>`. The type has the size, alignment and
-/// ABI of `Repr`.
+/// least 1, and `Repr` is an array of limbs, least significant first, that holds at least `Bits`
+/// bits, as for [`Uint`]: `[u8; N]`, `[u16; N]`, `[u32; N]` or `[u64; N]`. The bits above `Bits`, if
+/// any, are copies of the sign bit, so the limbs hold the value in two's complement. The module
+/// [`aliases`](crate::aliases) names common widths in `[u64; N]`, such as [`i256`](crate::i256) for
+/// `Int<U256, [u64; 4]>`. The type has the size, alignment and ABI of `Repr`.
 ///
 /// As for [`Uint`], [`from_limbs`](Self::from_limbs) creates a value from any bit pattern of a width
 /// that fills its limbs, and [`checked_from_limbs`](Self::checked_from_limbs) from the limbs of any
@@ -86,7 +95,7 @@ pub struct Uint<Bits, Repr> {
 /// ```
 /// use numo::{
 ///   Int, i256,
-///   typenum::{U7, U100},
+///   typenum::{U7, U24, U100},
 /// };
 ///
 /// let minus_one = i256::from_limbs([u64::MAX; 4]);
@@ -112,10 +121,16 @@ pub struct Uint<Bits, Repr> {
 ///
 /// // 100 bits in two limbs: the 28 bits above the sign bit copy it.
 /// assert_eq!(Int::<U100, [u64; 2]>::MIN.to_limbs(), [0, 0xffff_fff8 << 32]);
+///
+/// // 24 bits in three bytes: -197121 in two's complement, least significant byte first.
+/// let bytes = Int::<U24, [u8; 3]>::from_limbs([0xff, 0xfd, 0xfc]);
+/// assert_eq!(bytes.to_string(), "-197121");
+/// assert!(Int::<U24, [u8; 3]>::MIN < bytes);
 /// ```
 ///
-/// The width cannot be inferred from the limbs, so construction names the alias or the full type,
-/// for example `i256::from_limbs(limbs)` or `Int::<U200, [u64; 4]>::checked_from_limbs(limbs)`.
+/// The width cannot be inferred from the limbs, nor the storage from the expected type, so
+/// construction names the alias or the full type, for example `i256::from_limbs(limbs)` or
+/// `Int::<U200, [u64; 4]>::checked_from_limbs(limbs)`.
 #[repr(transparent)]
 pub struct Int<Bits, Repr> {
   // Holds a value of `Bits` bits: every bit of the limbs at index `Bits - 1` or above equals bit
@@ -153,7 +168,8 @@ impl<B, R> Int<B, R> {
 /// type, written `limb, bits, lower, upper;`, where `bits` is the number of bits of a limb and
 /// `lower` and `upper` are the modules of its limb layers, and followed by the examples of
 /// `checked_from_limbs` for `Uint` and for `Int`.
-// Trait methods cannot be `const`, so each limb type has inherent impls of its own.
+// Trait methods cannot be `const`, so each limb type has inherent impls of its own. Each limb type
+// also has an invocation of its own, which a diagnostic that points into the macro shows.
 macro_rules! array_integers {
   ($(
     $limb:ident, $bits:literal, $lower:ident, $upper:ident;
@@ -391,6 +407,94 @@ array_integers! {
   }
 }
 
+array_integers! {
+  u8, 8, limbs8, signed_limbs8;
+  Uint: {
+    /// ```
+    /// use numo::{Uint, typenum::U12};
+    ///
+    /// type U12x2 = Uint<U12, [u8; 2]>;
+    ///
+    /// // 0x234 and 0xfff, the largest value, have at most 12 bits, and 0x1000 has 13.
+    /// assert_eq!(U12x2::checked_from_limbs([0x34, 0x02]).unwrap().to_string(), "564");
+    /// assert_eq!(U12x2::checked_from_limbs([0xff, 0x0f]), Some(U12x2::MAX));
+    /// assert_eq!(U12x2::checked_from_limbs([0x00, 0x10]), None);
+    /// ```
+  }
+  Int: {
+    /// ```
+    /// use numo::{Int, typenum::U12};
+    ///
+    /// type I12x2 = Int<U12, [u8; 2]>;
+    ///
+    /// // -1 has every bit set, and -2048, the smallest value, every bit from the sign bit up.
+    /// assert_eq!(I12x2::checked_from_limbs([0xff, 0xff]).unwrap().to_string(), "-1");
+    /// assert_eq!(I12x2::checked_from_limbs([0x00, 0xf8]), Some(I12x2::MIN));
+    /// // 2048 and -2049 need 13 bits.
+    /// assert_eq!(I12x2::checked_from_limbs([0x00, 0x08]), None);
+    /// assert_eq!(I12x2::checked_from_limbs([0xff, 0xf7]), None);
+    /// ```
+  }
+}
+
+array_integers! {
+  u16, 16, limbs16, signed_limbs16;
+  Uint: {
+    /// ```
+    /// use numo::{Uint, typenum::U20};
+    ///
+    /// type U20x2 = Uint<U20, [u16; 2]>;
+    ///
+    /// // 2^16 + 1 and 2^20 - 1 have at most 20 bits, and 2^20 has 21.
+    /// assert_eq!(U20x2::checked_from_limbs([1, 1]).unwrap().to_string(), "65537");
+    /// assert_eq!(U20x2::checked_from_limbs([u16::MAX, 0xf]), Some(U20x2::MAX));
+    /// assert_eq!(U20x2::checked_from_limbs([0, 0x10]), None);
+    /// ```
+  }
+  Int: {
+    /// ```
+    /// use numo::{Int, typenum::U20};
+    ///
+    /// type I20x2 = Int<U20, [u16; 2]>;
+    ///
+    /// // -1, every bit set, and 2^19 - 1, the largest value.
+    /// assert!(I20x2::checked_from_limbs([u16::MAX; 2]).unwrap().is_negative());
+    /// assert_eq!(I20x2::checked_from_limbs([u16::MAX, 0x7]), Some(I20x2::MAX));
+    /// // 2^19 needs 21 bits.
+    /// assert_eq!(I20x2::checked_from_limbs([0, 0x8]), None);
+    /// ```
+  }
+}
+
+array_integers! {
+  u32, 32, limbs32, signed_limbs32;
+  Uint: {
+    /// ```
+    /// use numo::{Uint, typenum::U33};
+    ///
+    /// type U33x2 = Uint<U33, [u32; 2]>;
+    ///
+    /// // 2^32 + 1 and 2^33 - 1 have 33 bits, and 2^33 has 34.
+    /// assert_eq!(U33x2::checked_from_limbs([1, 1]).unwrap().to_string(), "4294967297");
+    /// assert_eq!(U33x2::checked_from_limbs([u32::MAX, 1]), Some(U33x2::MAX));
+    /// assert_eq!(U33x2::checked_from_limbs([0, 2]), None);
+    /// ```
+  }
+  Int: {
+    /// ```
+    /// use numo::{Int, typenum::U40};
+    ///
+    /// type I40x2 = Int<U40, [u32; 2]>;
+    ///
+    /// // -2^39, the smallest value, has every bit from the sign bit up set.
+    /// assert_eq!(I40x2::checked_from_limbs([0, 0xffff_ff80]), Some(I40x2::MIN));
+    /// assert_eq!(I40x2::MIN.to_string(), "-549755813888");
+    /// // 2^39 needs 41 bits.
+    /// assert_eq!(I40x2::checked_from_limbs([0, 0x80]), None);
+    /// ```
+  }
+}
+
 // Trait methods cannot be `const`.
 macro_rules! integer_traits {
   ($name:ident, $repr:ident) => {
@@ -445,9 +549,9 @@ macro_rules! integer_traits {
       R: $repr,
       B: FitsBits<R>,
     {
-      /// Writes the lowest `ceil(Bits / 64)` 64-bit limbs of the value, least significant first,
-      /// without the length prefix of an array, so that the hash depends only on the value and
-      /// `Bits`, whatever the number of limbs.
+      /// Writes the lowest `ceil(Bits / 64)` 64-bit words of the value, in two's complement for
+      /// `Int`, least significant first and without the length prefix of an array, so that the hash
+      /// depends only on the value and `Bits`, whatever the limb type and the number of limbs.
       #[inline]
       fn hash<H: Hasher>(&self, state: &mut H) {
         self.repr.hash_limbs(B::U32, state, Token::new());
@@ -460,8 +564,8 @@ macro_rules! integer_traits {
     {
       /// Writes the value in decimal, honoring width, fill, alignment, `+` and `0` as integers do.
       ///
-      /// The digits of a `[u64; N]` value take a stack buffer of `20 * N` bytes and time quadratic
-      /// in `N`.
+      /// The digits take a stack buffer of `3 * N`, `5 * N`, `10 * N` or `20 * N` bytes for limbs
+      /// of 8, 16, 32 or 64 bits, and time quadratic in `N`.
       #[inline]
       fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.repr.fmt_decimal(f, Token::new())

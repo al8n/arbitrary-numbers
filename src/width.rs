@@ -4,8 +4,8 @@
 use core::{cmp::Ordering, fmt, hash::Hasher, ops::Shl};
 
 use typenum::{
-  Const, IsEqual, IsLess, IsLessOrEqual, Le, LeEq, NonZero, Shleft, ToUInt, U, U6, U4294967296,
-  Unsigned,
+  Const, IsEqual, IsLess, IsLessOrEqual, Le, LeEq, NonZero, Shleft, ToUInt, U, U3, U4, U5, U6,
+  U4294967296, Unsigned,
 };
 
 use sealed::{
@@ -14,7 +14,9 @@ use sealed::{
 };
 
 use crate::{
-  int::{limbs, signed_limbs},
+  int::{
+    limbs, limbs8, limbs16, limbs32, signed_limbs, signed_limbs8, signed_limbs16, signed_limbs32,
+  },
   layout::Token,
 };
 
@@ -29,12 +31,13 @@ mod sealed {
   /// Seals [`FillsRepr`](super::FillsRepr).
   pub trait SealedFillsRepr<Repr> {}
 
-  /// Implemented only for `B1`, the result of `Bits <= 64 * N` when `[u64; N]` holds `Bits` bits.
+  /// Implemented only for `B1`, the result of `Bits <= B * N` when `[L; N]`, of limbs of `B` bits,
+  /// holds `Bits` bits.
   // The message and label name no storage, so that every storage can share them.
   #[diagnostic::on_unimplemented(
     message = "the storage cannot hold `Bits` bits",
     label = "`Bits` is greater than the bits of the storage",
-    note = "`[u64; N]` holds `64 * N` bits"
+    note = "`[u8; N]`, `[u16; N]`, `[u32; N]` and `[u64; N]` hold `8 * N`, `16 * N`, `32 * N` and `64 * N` bits"
   )]
   pub trait BitsFit {}
 
@@ -51,11 +54,12 @@ mod sealed {
 
   impl BitsBelow2Pow32 for typenum::B1 {}
 
-  /// Implemented only for `B1`, the result of `Bits == 64 * N` when `Bits` fills `[u64; N]`.
+  /// Implemented only for `B1`, the result of `Bits == B * N` when `Bits` fills `[L; N]`, of limbs
+  /// of `B` bits.
   #[diagnostic::on_unimplemented(
     message = "`Bits` does not fill the storage",
     label = "`Bits` is less than the bits of the storage",
-    note = "`[u64; N]` holds `64 * N` bits",
+    note = "`[u8; N]`, `[u16; N]`, `[u32; N]` and `[u64; N]` hold `8 * N`, `16 * N`, `32 * N` and `64 * N` bits",
     note = "`checked_from_limbs` takes the limbs of any width that fits and checks the value"
   )]
   pub trait ReprFilled {}
@@ -114,11 +118,14 @@ mod sealed {
 /// Marks that `Repr` holds every value of `Self` bits.
 ///
 /// `Self` is a [`typenum`] number from 1 to `2^32 - 1`, so that the constant `BITS`, a `u32`, holds
-/// it. The array `[u64; N]` holds up to `64 * N` bits, for every `N` for which `typenum` implements
-/// `ToUInt` for `Const<N>`: each `N` up to 1024, and larger ones such as the powers of 2 and of 10.
-/// A storage may have more bits than needed, as `[u64; 4]` has for 200 bits. [`Uint`](crate::Uint)
-/// and [`Int`](crate::Int) require this bound on their constants, constructors and `Default`, not
-/// on the types themselves, so generic code adds it where it uses them:
+/// it. The arrays `[u8; N]`, `[u16; N]`, `[u32; N]` and `[u64; N]` hold up to `8 * N`, `16 * N`,
+/// `32 * N` and `64 * N` bits, for every `N` for which `typenum` implements `ToUInt` for
+/// `Const<N>`: each `N` up to 1024, and larger ones such as the powers of 2 and of 10. An array of
+/// any other length, such as `[u8; 1025]`, holds no width, so the integers stored in it have no
+/// constants, constructors or `Default`, and no value of them can be made. A storage may have more
+/// bits than needed, as `[u64; 4]` has for 200 bits. [`Uint`](crate::Uint) and
+/// [`Int`](crate::Int) require this bound on their constants, constructors and `Default`, not on
+/// the types themselves, so generic code adds it where it uses them:
 ///
 /// ```
 /// use numo::{FitsBits, Uint};
@@ -144,10 +151,11 @@ impl<B, R> FitsBits<R> for B where B: Unsigned + NonZero + SealedFitsBits<R> {}
 
 /// Marks that `Self` bits fill `Repr` exactly, so that every bit pattern of `Repr` is a value.
 ///
-/// `64 * N` bits fill the array `[u64; N]`. The constructor `from_limbs` of
-/// [`Uint`](crate::Uint::from_limbs) and [`Int`](crate::Int::from_limbs) requires this bound and
-/// never fails; `checked_from_limbs` takes the limbs of any width that fits and checks the value.
-/// This trait is sealed and cannot be implemented outside this crate.
+/// `8 * N`, `16 * N`, `32 * N` and `64 * N` bits fill the arrays `[u8; N]`, `[u16; N]`, `[u32; N]`
+/// and `[u64; N]`. The constructor `from_limbs` of [`Uint`](crate::Uint::from_limbs) and
+/// [`Int`](crate::Int::from_limbs) requires this bound and never fails; `checked_from_limbs` takes
+/// the limbs of any width that fits and checks the value. This trait is sealed and cannot be
+/// implemented outside this crate.
 #[diagnostic::on_unimplemented(
   message = "`Bits` must fill the storage exactly",
   label = "`Bits` is not known to fill the storage",
@@ -182,15 +190,16 @@ where
 {
 }
 
-/// A storage of [`Uint`](crate::Uint): the array `[u64; N]` holds an unsigned integer in `N`
-/// 64-bit limbs, least significant first.
+/// A storage of [`Uint`](crate::Uint): the array `[u8; N]`, `[u16; N]`, `[u32; N]` or `[u64; N]`
+/// holds an unsigned integer in `N` limbs of 8, 16, 32 or 64 bits, least significant first.
 ///
 /// `Uint<Bits, Repr>` implements `Ord`, `Hash`, `Display`, `Debug` and `Default` for every `Repr`
 /// that implements this trait. This trait is sealed and cannot be implemented outside this crate.
 pub trait UintRepr: Eq + SealedUintRepr {}
 
-/// A storage of [`Int`](crate::Int): the array `[u64; N]` holds a signed integer in `N` 64-bit
-/// limbs, least significant first, in two's complement.
+/// A storage of [`Int`](crate::Int): the array `[u8; N]`, `[u16; N]`, `[u32; N]` or `[u64; N]`
+/// holds a signed integer in `N` limbs of 8, 16, 32 or 64 bits, least significant first, in two's
+/// complement.
 ///
 /// `Int<Bits, Repr>` implements `Ord`, `Hash`, `Display`, `Debug` and `Default` for every `Repr`
 /// that implements this trait. This trait is sealed and cannot be implemented outside this crate.
@@ -264,7 +273,12 @@ macro_rules! array_storage {
   )+};
 }
 
-array_storage!(u64: U6, limbs, signed_limbs);
+array_storage!(
+  u64: U6, limbs, signed_limbs;
+  u8: U3, limbs8, signed_limbs8;
+  u16: U4, limbs16, signed_limbs16;
+  u32: U5, limbs32, signed_limbs32;
+);
 
 /// Writes the lowest `ceil(bits / 64)` 64-bit words of the integer in `limbs` to `state`, least
 /// significant first, without the length prefix of a slice. Each word joins `64 / B` limbs of `B`

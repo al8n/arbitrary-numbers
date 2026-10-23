@@ -57,19 +57,25 @@ FEATURES
   digits and a rounding mode toward `Down`. The `proptest` feature adds `numo::proptest`, with
   `DecimalStrategy` and `DecimalValueTree`, and the `quickcheck` feature allocates only the boxed
   iterator that its trait requires shrinking to return.
-- `Uint<Bits, Repr>` and `Int<Bits, Repr>`: integers of any width `Bits`, stored in an array
-  `[u64; N]` of 64-bit limbs that has at least `Bits` bits, least significant limb first, in two's
-  complement for `Int`. The module `aliases`, re-exported at the crate root, names the widths that
-  fill their limbs: `u192`, `u256`, `u320`, `u384`, `u448`, `u512`, `u768`, `u1024`, `u2048` and
-  `u4096`, and `i192` to `i4096`.
+- `Uint<Bits, Repr>` and `Int<Bits, Repr>`: integers of any width `Bits`, stored in an array of
+  limbs that has at least `Bits` bits, least significant limb first, in two's complement for `Int`:
+  `[u64; N]`, `[u32; N]`, `[u16; N]` or `[u8; N]`. `[u8; N]` has alignment 1 and holds the
+  little-endian bytes of the value on every target. The module `aliases`, re-exported at the crate
+  root, names the widths that fill 64-bit limbs: `u192`, `u256`, `u320`, `u384`, `u448`, `u512`,
+  `u768`, `u1024`, `u2048` and `u4096`, and `i192` to `i4096`.
   - `const` items and methods: `BITS`, `ZERO`, `MIN` and `MAX`; `from_limbs` for a width that
     fills its limbs, and `checked_from_limbs` for any width, which returns `None` unless the limbs
     hold a value of `Bits` bits; `to_limbs`, `as_limbs` and `is_zero`, plus `is_negative` and
     `is_positive` for `Int`.
-  - Numeric `Eq`, `Ord` and `Hash`, where the hash depends only on the value and `Bits`, decimal
-    `Display` and `Debug`, and `Default`, which is zero. There is no arithmetic yet.
-  - `FitsBits` and `FillsRepr`, which relate a width to the storages that hold it and to the storage
-    that it fills, with compile-time diagnostics, and the sealed storage traits `UintRepr` and
-    `IntRepr`.
+  - Numeric `Eq`, `Ord` and `Hash`, where the hash depends only on the value and `Bits`: every
+    storage writes the same 64-bit words. Decimal `Display` and `Debug`, and `Default`, which is
+    zero. There is no arithmetic yet.
+  - `FitsBits` and `FillsRepr`, which relate a width to the storages that hold it and to the
+    storages that it fills, with compile-time diagnostics, and the sealed storage traits `UintRepr`
+    and `IntRepr`.
+  - Each limb type has constants and constructors of its own, so a path that leaves the storage to
+    inference is ambiguous (E0034): `Uint::MAX` with an expected type or passed as an argument,
+    `Uint::from_limbs(..)` with an expected type, and `Uint::<U256, _>::MAX`. Naming the storage,
+    as in `Uint::<U256, [u64; 4]>::MAX` or `Uint::<_, [u64; 4]>::MAX`, or an alias resolves it.
 - `Storage`, `DigitCount`, `FitsDigits`, `Layout`, `Widen`, `WidenRepr` and `Pick`: the type-level
   capacity and sign checks, with compile-time diagnostics for invalid digit counts and storages.
