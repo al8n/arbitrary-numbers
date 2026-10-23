@@ -57,9 +57,19 @@ FEATURES
   digits and a rounding mode toward `Down`. The `proptest` feature adds `numo::proptest`, with
   `DecimalStrategy` and `DecimalValueTree`, and the `quickcheck` feature allocates only the boxed
   iterator that its trait requires shrinking to return.
-- `Uint<Bits, Repr>` and `Int<Bits, Repr>`, with the aliases `u192`, `u256`, `u320`, `u384`, `u448`,
-  `u512`, `i192`, `i256`, `i320`, `i384`, `i448` and `i512` over 64-bit limbs: `const fn`
-  `from_limbs` and `to_limbs` (least significant limb first, two's complement for `Int`), `ZERO`,
-  numeric `Eq`, `Ord` and `Hash`, and decimal `Display` and `Debug`.
+- `Uint<Bits, Repr>` and `Int<Bits, Repr>`: integers of any width `Bits`, stored in an array
+  `[u64; N]` of 64-bit limbs that has at least `Bits` bits, least significant limb first, in two's
+  complement for `Int`. The module `aliases`, re-exported at the crate root, names the widths that
+  fill their limbs: `u192`, `u256`, `u320`, `u384`, `u448`, `u512`, `u768`, `u1024`, `u2048` and
+  `u4096`, and `i192` to `i4096`.
+  - `const` items and methods: `BITS`, `ZERO`, `MIN` and `MAX`; `from_limbs` for a width that
+    fills its limbs, and `checked_from_limbs` for any width, which returns `None` unless the limbs
+    hold a value of `Bits` bits; `to_limbs`, `as_limbs` and `is_zero`, plus `is_negative` and
+    `is_positive` for `Int`.
+  - Numeric `Eq`, `Ord` and `Hash`, where the hash depends only on the value and `Bits`, decimal
+    `Display` and `Debug`, and `Default`, which is zero. There is no arithmetic yet.
+  - `FitsBits` and `FillsRepr`, which relate a width to the storages that hold it and to the storage
+    that it fills, with compile-time diagnostics, and the sealed storage traits `UintRepr` and
+    `IntRepr`.
 - `Storage`, `DigitCount`, `FitsDigits`, `Layout`, `Widen`, `WidenRepr` and `Pick`: the type-level
   capacity and sign checks, with compile-time diagnostics for invalid digit counts and storages.

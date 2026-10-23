@@ -7,7 +7,7 @@
 
 use core::cmp::Ordering;
 
-use super::{DIGIT_BUF_LEN, DigitBuf};
+use super::DigitBuf;
 use crate::rounding::{self, RoundingMode};
 
 /// `10^19`, the largest power of ten in a `u64`.
@@ -462,9 +462,17 @@ pub(crate) const fn round_div<const N: usize>(
 /// Writes the decimal digits of `value` to the end of `buf`, without leading zeros (zero is a
 /// single `0`), and returns the index of the first digit. Requires `value` to have at most
 /// `DIGIT_BUF_LEN` digits, which holds for `N <= 8`.
+#[inline]
 pub(crate) const fn write_digits<const N: usize>(value: &[u64; N], buf: &mut DigitBuf) -> usize {
+  write_digits_into(value, buf)
+}
+
+/// Writes the decimal digits of `value` to the end of `buf`, without leading zeros (zero is a
+/// single `0`), and returns the index of the first digit. Requires `buf` to hold every digit of
+/// `value`, which `20 * N` bytes do.
+pub(crate) const fn write_digits_into<const N: usize>(value: &[u64; N], buf: &mut [u8]) -> usize {
   let mut value = *value;
-  let mut start = DIGIT_BUF_LEN;
+  let mut start = buf.len();
   // Divides off 19 digits at a time, least significant first.
   loop {
     let (quotient, mut chunk) = div_rem_u64(&value, TEN_POW_19);
@@ -527,6 +535,43 @@ pub(crate) const fn push_digits<const N: usize>(
     i += 1;
   }
   append(&value, scale, chunk)
+}
+
+/// Returns `true` if `value < 2^bits`: every bit at index `bits` or above is zero.
+pub(crate) const fn fits_bits<const N: usize>(value: &[u64; N], bits: u32) -> bool {
+  let mut i = (bits / 64) as usize;
+  if i >= N {
+    return true;
+  }
+  // In the limb at index `bits / 64`, only the bits below index `bits` may be set, and in the limbs
+  // above it, none.
+  if value[i] >> (bits % 64) != 0 {
+    return false;
+  }
+  i += 1;
+  while i < N {
+    if value[i] != 0 {
+      return false;
+    }
+    i += 1;
+  }
+  true
+}
+
+/// `2^bits - 1`, the largest value of `bits` bits. Requires `bits <= 64N`.
+pub(crate) const fn max_of_bits<const N: usize>(bits: u32) -> [u64; N] {
+  let mut max = [0; N];
+  let full = (bits / 64) as usize;
+  let mut i = 0;
+  while i < full {
+    max[i] = u64::MAX;
+    i += 1;
+  }
+  if full < N {
+    // The shift is below 64, so it does not overflow, and a shift of zero leaves the limb zero.
+    max[full] = (1 << (bits % 64)) - 1;
+  }
+  max
 }
 
 /// Zero-extends or truncates `value` to `M` limbs.

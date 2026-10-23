@@ -26,7 +26,7 @@
 | 类型族 | 状态 |
 |---|---|
 | `Decimal<Integral, Fraction, Repr>`：精确的定点十进制数 | 已提供 |
-| `Uint<Bits, Repr>` 与 `Int<Bits, Repr>`：任意位宽的整数 | 已提供 192、256、320、384、448、512 位，作为十进制数的存储；运算与其他位宽计划中 |
+| `Uint<Bits, Repr>` 与 `Int<Bits, Repr>`：任意位宽的整数 | 已提供以 64 位 limb 存储的任意位宽，包括常量、带检查的构造、比较、哈希与格式化；运算计划中 |
 | 标准格式的浮点类型，例如 `f16`、`bf16` 与 `f128` | 计划中 |
 | 上述整数类型的原子版本 | 计划中 |
 
@@ -124,8 +124,20 @@ fn main() -> Result<(), ParseError> {
 }
 ```
 
-宽整数只提供作为存储所需的部分：`from_limbs`、`to_limbs`、`ZERO`，按数值的相等、比较与哈希，
-以及十进制格式化。它们的运算、其他位宽与其他 limb 类型计划中。
+## 整数
+
+`Uint<Bits, Repr>` 与 `Int<Bits, Repr>` 可以是任意位宽 `Bits`，存放在至少有 `Bits` 位的 64 位 limb
+数组 `[u64; N]` 中，最低位的 limb 在前，`Int` 使用二进制补码。别名对应恰好填满 limb 的位宽：上面的宽存储，
+以及 `u768`、`u1024`、`u2048`、`u4096` 与对应的有符号类型。其他位宽写出完整类型，例如
+`Uint<U200, [u64; 4]>`。
+
+- `const` 常量与方法：`BITS`、`ZERO`、`MIN` 与 `MAX`；位宽填满 limb 时的 `from_limbs`，以及适用于任意位宽的
+  `checked_from_limbs`，limb 中的值超出 `Bits` 位的范围时返回 `None`；`to_limbs`、`as_limbs` 与 `is_zero`，
+  `Int` 还有 `is_negative` 与 `is_positive`。
+- 按数值的相等、比较与哈希，哈希只取决于值与 `Bits`；十进制格式化；`Default` 为零。
+- 存储放不下的位宽和零位宽，在类型检查阶段就会报错。
+
+它们的运算与其他 limb 类型计划中。
 
 #### License
 

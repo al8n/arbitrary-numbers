@@ -72,9 +72,37 @@
 //! # Ok::<(), numo::ParseError>(())
 //! ```
 //!
-//! The wide integers provide only what a storage needs: [`from_limbs`](u256::from_limbs),
-//! [`to_limbs`](u256::to_limbs), `ZERO`, numeric equality, ordering and hashing, and decimal
-//! formatting. They have no arithmetic of their own.
+//! # Integers
+//!
+//! [`Uint<Bits, Repr>`](Uint) and [`Int<Bits, Repr>`](Int) are integers of `Bits` bits, unsigned
+//! and in two's complement, stored in an array `[u64; N]` of 64-bit limbs, least significant first,
+//! that holds at least `Bits` bits. The module [`aliases`] names the widths of the wide storages
+//! above and 768, 1024, 2048 and 4096 bits, each of which fills its limbs; any other width is
+//! written out, such as `Uint<U200, [u64; 4]>`. [`FitsBits`] relates a width to the storages that
+//! hold it, and [`FillsRepr`] to the storage that it fills.
+//!
+//! Each type has the constants `BITS`, `ZERO`, `MIN` and `MAX`. Its `const fn` constructors are
+//! `from_limbs`, for a width that fills its limbs, and `checked_from_limbs`, which checks that the
+//! limbs hold a value of `Bits` bits; its `const fn` methods are `to_limbs`, `as_limbs` and
+//! `is_zero`, and for `Int` also `is_negative` and `is_positive`. Values compare, hash and format
+//! by their numeric value. There is no integer arithmetic yet.
+//!
+//! ```
+//! use numo::{
+//!   Int, Uint, i256,
+//!   typenum::{U7, U200},
+//! };
+//!
+//! // A width that fills its limbs takes any bit pattern: -1 has every bit set.
+//! let minus_one = i256::from_limbs([u64::MAX; 4]);
+//! assert!(minus_one.is_negative() && i256::MIN < minus_one);
+//!
+//! // Another width checks the limbs.
+//! type U200x4 = Uint<U200, [u64; 4]>;
+//! assert_eq!(U200x4::MAX.to_limbs(), [u64::MAX, u64::MAX, u64::MAX, 0xff]);
+//! assert_eq!(U200x4::checked_from_limbs([0, 0, 0, 0x100]), None);
+//! assert_eq!(Int::<U7, [u64; 1]>::MIN.to_string(), "-64");
+//! ```
 //!
 //! # `typenum`
 //!
@@ -206,15 +234,16 @@ mod bigint;
 
 pub use typenum;
 
+pub use aliases::*;
 pub use decimal::{ConvertError, Decimal, DivideError, ParseError, ParseErrorKind, QuantizeError};
-pub use integer::{
-  Int, Uint, i192, i256, i320, i384, i448, i512, u192, u256, u320, u384, u448, u512,
-};
+pub use integer::{Int, Uint};
 pub use layout::{
   DigitCount, DivIntermediate, FitsDigits, Layout, Pick, Storage, Widen, WidenRepr,
 };
 pub use rounding::RoundingMode;
+pub use width::{FillsRepr, FitsBits, IntRepr, UintRepr};
 
+pub mod aliases;
 #[cfg(feature = "arbitrary")]
 mod arbitrary;
 mod decimal;
@@ -231,3 +260,4 @@ mod rounding;
 mod sample;
 #[cfg(feature = "serde")]
 mod serde;
+mod width;
