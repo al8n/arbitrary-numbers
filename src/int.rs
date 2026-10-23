@@ -33,11 +33,37 @@ pub(crate) type DigitBuf = [core::primitive::u8; DIGIT_BUF_LEN];
 
 mod limb_layer;
 pub(crate) mod limbs;
-#[cfg(test)]
-mod limbs32;
+#[cfg_attr(
+  not(test),
+  expect(dead_code, reason = "only the -Dwarnings test build lints it fully")
+)]
+pub(crate) mod limbs16;
+#[cfg_attr(
+  not(test),
+  expect(dead_code, reason = "only the -Dwarnings test build lints it fully")
+)]
+pub(crate) mod limbs32;
+#[cfg_attr(
+  not(test),
+  expect(dead_code, reason = "only the -Dwarnings test build lints it fully")
+)]
+pub(crate) mod limbs8;
 pub(crate) mod signed_limbs;
-#[cfg(test)]
-mod signed_limbs32;
+#[cfg_attr(
+  not(test),
+  expect(dead_code, reason = "only the -Dwarnings test build lints it fully")
+)]
+pub(crate) mod signed_limbs16;
+#[cfg_attr(
+  not(test),
+  expect(dead_code, reason = "only the -Dwarnings test build lints it fully")
+)]
+pub(crate) mod signed_limbs32;
+#[cfg_attr(
+  not(test),
+  expect(dead_code, reason = "only the -Dwarnings test build lints it fully")
+)]
+pub(crate) mod signed_limbs8;
 
 macro_rules! native {
   (unsigned $uint:ident) => {

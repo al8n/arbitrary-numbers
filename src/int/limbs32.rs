@@ -1,8 +1,7 @@
 //! Lower layer for `[u32; N]`: unsigned integers of `N` limbs of `B = 32` bits, least significant
 //! first.
 //!
-//! Only the tests build it. They check the layer that `limb_layer!` generates for a limb type
-//! other than `u64` against native integers, `num-bigint` and the layer for `[u64; N]`.
+//! `limb_layer!` generates the layer from the two functions below, which compute in `u64`.
 
 use super::limb_layer::limb_layer;
 

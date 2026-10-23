@@ -5,6 +5,9 @@
 //! instance. The inputs depend on the limb type only through `B`: the `N`, the seeds and the order
 //! of the random draws are the same for every instance. Each instance adds the tests that compare
 //! it with native integers, whose widths differ from one limb type to another.
+//!
+//! The instances for limbs narrower than `u64` share those tests as well: `narrow_limb_tests!`
+//! writes their helpers, and `native_oracle!` writes each test against a native integer.
 
 /// Defines, in the `tests` module of an instance of `limb_layer!`, the tests that every instance
 /// shares, their helpers, and the imports that they and the instance's own tests use:
@@ -25,6 +28,10 @@ macro_rules! limb_layer_tests {
 
     /// The limb with only its top bit set.
     const HIGH: Limb = 1 << (B - 1);
+
+    /// The number of bits of the widest values that the tests of digits write: 4096, or under Miri,
+    /// which divides many narrow limbs slowly, 512 for limbs narrower than 32 bits.
+    const WIDEST: u32 = if B < 32 && cfg!(miri) { 512 } else { 4096 };
 
     /// `2^(B * k)`.
     fn boundary<const N: usize>(k: usize) -> [Limb; N] {
@@ -564,18 +571,13 @@ macro_rules! limb_layer_tests {
       digits_into_a_slice::<8>();
       digits_into_a_slice::<16>();
       digits_into_a_slice::<64>();
-      // `2^4096 - 1` has 1234 digits.
-      let mut buf = [0; 1234];
-      assert_eq!(
-        write_digits_into(&[Limb::MAX; 4096 / B as usize], &mut buf),
-        0
-      );
-      assert_eq!(
-        &buf[..],
-        bigint::from_limbs(&[Limb::MAX; 4096 / B as usize], false)
-          .to_string()
-          .as_bytes()
-      );
+      // `2^4096 - 1` has 1234 digits, and `2^512 - 1` has 155.
+      let widest = [Limb::MAX; (WIDEST / B) as usize];
+      let expected = bigint::from_limbs(&widest, false).to_string();
+      assert_eq!(expected.len(), if WIDEST == 4096 { 1234 } else { 155 });
+      let mut buf = vec![0; expected.len()];
+      assert_eq!(write_digits_into(&widest, &mut buf), 0);
+      assert_eq!(buf, expected.as_bytes());
     }
 
     /// A zero divisor fails as native division does, in the single-limb division that it takes.
@@ -599,6 +601,10 @@ macro_rules! limb_layer_tests {
 
     /// The limb with only its top bit set.
     const HIGH: Limb = 1 << (B - 1);
+
+    /// The number of bits of the widest values that the tests of digits write: 4096, or under Miri,
+    /// which divides many narrow limbs slowly, 512 for limbs narrower than 32 bits.
+    const WIDEST: u32 = if B < 32 && cfg!(miri) { 512 } else { 4096 };
 
     /// `MIN`, with only the sign bit set.
     fn min<const N: usize>() -> [Limb; N] {
@@ -958,23 +964,23 @@ macro_rules! limb_layer_tests {
       widths_against_big_integers::<64>();
     }
 
-    /// The magnitude of `-2^4095`, the smallest value of 4096 bits, has 1233 digits.
+    /// The magnitude of `-2^4095`, the smallest value of 4096 bits, has 1233 digits, and that of
+    /// `-2^511` has 154.
     #[test]
     #[cfg_attr(
       all(miri, target_pointer_width = "32"),
       ignore = "Miri on 32-bit targets runs out of addresses in num-bigint allocations"
     )]
     fn digits_of_the_smallest_value_of_64_limbs() {
-      let min = min_of_bits::<{ 4096 / B as usize }>(4096);
-      let mut buf = [0; 1233];
+      let min = min_of_bits::<{ (WIDEST / B) as usize }>(WIDEST);
+      let expected = (-bigint::from_limbs(&min, true)).to_string();
+      assert_eq!(expected.len(), if WIDEST == 4096 { 1233 } else { 154 });
+      let mut buf = vec![0; expected.len()];
       assert_eq!(
         crate::int::$unsigned::write_digits_into(&unsigned_abs(&min), &mut buf),
         0
       );
-      assert_eq!(
-        &buf[..],
-        (-bigint::from_limbs(&min, true)).to_string().as_bytes()
-      );
+      assert_eq!(buf, expected.as_bytes());
     }
 
     fn powers_of_ten<const N: usize>() {
@@ -1003,3 +1009,342 @@ macro_rules! limb_layer_tests {
 }
 
 pub(crate) use limb_layer_tests;
+
+/// Defines, in the `tests` module of an instance of `limb_layer!` for a limb type narrower than
+/// `u64`, after `limb_layer_tests!`, the helpers of the tests that compare the instance with native
+/// integers and with the layer for `[u64; N]`: `narrow_limb_tests!(unsigned)` for a lower layer,
+/// and `narrow_limb_tests!(signed)` for an upper layer. The samples depend on the limb type only
+/// through `B`.
+macro_rules! narrow_limb_tests {
+  (unsigned) => {
+    /// Values around zero, the limb boundaries, the powers of ten and the limit of `u128`.
+    fn samples() -> Vec<u128> {
+      let mut values = vec![0, 1, 2, 9, 10, u128::MAX, u128::MAX - 1];
+      // `2^(B * k)` for each `k` from 1 below `128 / B`, and `2^127`.
+      for boundary in (1..128 / B).map(|k| 1u128 << (B * k)).chain([1 << 127]) {
+        values.extend([boundary - 1, boundary, boundary + 1]);
+      }
+      for exp in 1..=38 {
+        let power = 10u128.pow(exp);
+        values.extend([power - 1, power, power + 1]);
+      }
+      values
+    }
+
+    /// The samples that `T` holds, or under Miri every third of them.
+    fn samples_of<T: TryFrom<u128>>() -> Vec<T> {
+      bigint::thin(
+        samples()
+          .into_iter()
+          .filter_map(|value| T::try_from(value).ok())
+          .collect(),
+      )
+    }
+
+    /// `value` in `N` limbs, least significant first. Requires `B * N <= 128` and
+    /// `value < 2^(B * N)`.
+    fn limbs_of<T: Into<u128>, const N: usize>(value: T) -> [Limb; N] {
+      let value = value.into();
+      core::array::from_fn(|i| (value >> (B as usize * i)) as Limb)
+    }
+
+    /// Joins each run of `64 / B` limbs into a `u64` limb, the low one first. Requires
+    /// `M == 64 / B * N`.
+    const fn join<const M: usize, const N: usize>(value: &[Limb; M]) -> [u64; N] {
+      let per_word = (u64::BITS / B) as usize;
+      let mut joined = [0; N];
+      let mut i = 0;
+      while i < N {
+        let mut k = 0;
+        while k < per_word {
+          joined[i] |= (value[per_word * i + k] as u64) << (B as usize * k);
+          k += 1;
+        }
+        i += 1;
+      }
+      joined
+    }
+
+    /// Checks the layer for `[Limb; M]` against the layer for `[u64; N]`, which holds the same
+    /// integers in `64 / B` times fewer limbs. It allocates nothing, so that it also runs on 32-bit
+    /// Miri, where the tests against `num-bigint` run out of addresses.
+    fn matches_the_u64_layer<const M: usize, const N: usize>() {
+      use crate::int::limbs;
+
+      const { assert!(M == (u64::BITS / B) as usize * N) };
+      let mut rng = Rng(0x5eed_3264 ^ N as u64);
+      let count = if cfg!(miri) { 16 } else { 2000 };
+      for _ in 0..count {
+        // Nonzero values, whose limbs have every normalization shift of a limb.
+        let (a, b) = (rng.limbs::<M>(), rng.limbs::<M>());
+        let (wide_a, wide_b): ([u64; N], [u64; N]) = (join(&a), join(&b));
+        assert_eq!(cmp(&a, &b), limbs::cmp(&wide_a, &wide_b));
+        assert_eq!(le(&a, &b), limbs::le(&wide_a, &wide_b));
+        let (sum, carry) = overflowing_add(&a, &b);
+        assert_eq!(
+          (join(&sum), carry),
+          limbs::overflowing_add(&wide_a, &wide_b)
+        );
+        let (difference, borrow) = overflowing_sub(&a, &b);
+        assert_eq!(
+          (join(&difference), borrow),
+          limbs::overflowing_sub(&wide_a, &wide_b)
+        );
+        let (quotient, remainder) = div_rem(&a, &b);
+        assert_eq!(
+          (join(&quotient), join(&remainder)),
+          limbs::div_rem(&wide_a, &wide_b),
+          "{a:x?} / {b:x?}"
+        );
+        for mode in bigint::MODES {
+          let (rounded, remainder, away) = round_div(&a, &b, mode);
+          assert_eq!(
+            (join(&rounded), join(&remainder), away),
+            limbs::round_div(&wide_a, &wide_b, mode)
+          );
+        }
+
+        // The low halves, whose product is representable.
+        let (mut low_a, mut low_b) = (a, b);
+        low_a[M / 2..].fill(0);
+        low_b[M / 2..].fill(0);
+        let (wide_low_a, wide_low_b): ([u64; N], [u64; N]) = (join(&low_a), join(&low_b));
+        assert_eq!(
+          join(&mul(&low_a, &low_b)),
+          limbs::mul(&wide_low_a, &wide_low_b)
+        );
+
+        let exp = (rng.next() % (20 * N as u64 + 2)) as u32;
+        let product = checked_mul_pow10(&a, exp);
+        assert_eq!(
+          product.map(|product| join(&product)),
+          limbs::checked_mul_pow10(&wide_a, exp)
+        );
+        if product.is_some() {
+          assert_eq!(join(&mul_pow10(&a, exp)), limbs::mul_pow10(&wide_a, exp));
+        }
+        let (quotient, remainder) = div_rem_pow10(&a, exp);
+        assert_eq!(
+          (join(&quotient), join(&remainder)),
+          limbs::div_rem_pow10(&wide_a, exp)
+        );
+
+        let bits = (rng.next() % (64 * N as u64 + 1)) as u32;
+        assert_eq!(fits_bits(&a, bits), limbs::fits_bits(&wide_a, bits));
+        assert_eq!(join(&max_of_bits::<M>(bits)), limbs::max_of_bits::<N>(bits));
+
+        // The digits agree and read back. Both layers need `20 * N` bytes at most.
+        let (mut buf, mut wide_buf) = ([0; 160], [0; 160]);
+        let start = write_digits_into(&a, &mut buf);
+        let wide_start = limbs::write_digits_into(&wide_a, &mut wide_buf);
+        assert_eq!(&buf[start..], &wide_buf[wide_start..]);
+        assert_eq!(push_digits(&[0; M], &buf, start, buf.len()), a);
+      }
+    }
+  };
+  (signed) => {
+    /// Values around zero, the limb boundaries, the powers of ten and the limits of `i128`.
+    fn samples() -> Vec<i128> {
+      let mut values = vec![
+        0,
+        1,
+        -1,
+        9,
+        -9,
+        i128::MAX,
+        i128::MIN,
+        i128::MAX - 1,
+        i128::MIN + 1,
+      ];
+      // `2^(B * k - 1)` and `2^(B * k)` for each `k` from 1 below `128 / B`.
+      for k in 1..128 / B {
+        for boundary in [1i128 << (B * k - 1), 1 << (B * k)] {
+          values.extend([boundary - 1, boundary, boundary + 1]);
+          values.extend([1 - boundary, -boundary, -boundary - 1]);
+        }
+      }
+      for exp in 1..=38 {
+        let power = 10i128.pow(exp);
+        values.extend([power - 1, power, power + 1, 1 - power, -power, -power - 1]);
+      }
+      values
+    }
+
+    /// The samples that `T` holds, or under Miri every third of them.
+    fn samples_of<T: TryFrom<i128>>() -> Vec<T> {
+      bigint::thin(
+        samples()
+          .into_iter()
+          .filter_map(|value| T::try_from(value).ok())
+          .collect(),
+      )
+    }
+
+    /// `value` in `N` limbs of two's complement, least significant first. Requires `B * N <= 128`
+    /// and `value` to be within the range of `B * N` bits.
+    fn limbs_of<T: Into<i128>, const N: usize>(value: T) -> [Limb; N] {
+      let value = value.into();
+      core::array::from_fn(|i| (value >> (B as usize * i)) as Limb)
+    }
+
+    /// The unsigned integer `value` in `N` limbs, least significant first. Requires
+    /// `B * N <= 128` and `value < 2^(B * N)`.
+    fn unsigned_limbs_of<T: Into<u128>, const N: usize>(value: T) -> [Limb; N] {
+      let value = value.into();
+      core::array::from_fn(|i| (value >> (B as usize * i)) as Limb)
+    }
+  };
+}
+
+pub(crate) use narrow_limb_tests;
+
+/// Defines a test that compares `N` limbs with the native integer of `B * N` bits:
+/// `native_oracle!(unsigned name, native, N)` in the `tests` module of a lower layer, and
+/// `native_oracle!(signed name, native, N)` in that of an upper layer, after
+/// `narrow_limb_tests!`.
+macro_rules! native_oracle {
+  (unsigned $name:ident, $native:ident, $n:literal) => {
+    #[test]
+    fn $name() {
+      let samples: Vec<$native> = samples_of();
+      let max_exp = $native::MAX.ilog10();
+      for &a in &samples {
+        let limbs_a: [Limb; $n] = limbs_of(a);
+        assert_eq!(is_zero(&limbs_a), a == 0);
+        assert_eq!(is_positive(&limbs_a), a > 0);
+        for &b in &samples {
+          let limbs_b: [Limb; $n] = limbs_of(b);
+          assert_eq!(cmp(&limbs_a, &limbs_b), a.cmp(&b));
+          assert_eq!(le(&limbs_a, &limbs_b), a <= b);
+          let (sum, carry) = a.overflowing_add(b);
+          assert_eq!(overflowing_add(&limbs_a, &limbs_b), (limbs_of(sum), carry));
+          let (difference, borrow) = a.overflowing_sub(b);
+          assert_eq!(
+            overflowing_sub(&limbs_a, &limbs_b),
+            (limbs_of(difference), borrow)
+          );
+          assert_eq!(
+            checked_add(&limbs_a, &limbs_b),
+            a.checked_add(b).map(limbs_of)
+          );
+          assert_eq!(
+            checked_sub(&limbs_a, &limbs_b),
+            a.checked_sub(b).map(limbs_of)
+          );
+          if let Some(product) = a.checked_mul(b) {
+            assert_eq!(mul(&limbs_a, &limbs_b), limbs_of(product));
+          }
+          if b != 0 {
+            assert_eq!(
+              div_rem(&limbs_a, &limbs_b),
+              (limbs_of(a / b), limbs_of(a % b)),
+              "{a} / {b}"
+            );
+          }
+        }
+        // Up to two exponents beyond the largest power of ten that the type holds.
+        for exp in 0..=max_exp + 2 {
+          let power = $native::checked_pow(10, exp);
+          // Zero times any power is zero; otherwise the power itself must fit.
+          let product = match a {
+            0 => Some(0),
+            _ => power.and_then(|power| a.checked_mul(power)),
+          };
+          assert_eq!(checked_mul_pow10(&limbs_a, exp), product.map(limbs_of));
+          if let Some(product) = product {
+            assert_eq!(mul_pow10(&limbs_a, exp), limbs_of(product));
+          }
+          let (quotient, remainder) = div_rem_pow10(&limbs_a, exp);
+          match power {
+            Some(power) => assert_eq!(
+              (quotient, remainder),
+              (limbs_of(a / power), limbs_of(a % power))
+            ),
+            None => assert_eq!((quotient, remainder), ([0; $n], limbs_a)),
+          }
+        }
+
+        let mut buf = [0xff; DIGIT_BUF_LEN];
+        let start = write_digits(&limbs_a, &mut buf);
+        assert_eq!(&buf[start..], a.to_string().as_bytes());
+      }
+      for exp in 0..=max_exp {
+        assert_eq!(pow10::<$n>(exp), limbs_of($native::pow(10, exp)));
+        assert_eq!(
+          max_magnitude::<$n>(exp),
+          limbs_of($native::pow(10, exp) - 1)
+        );
+      }
+    }
+  };
+  (signed $name:ident, $native:ident, $n:literal) => {
+    #[test]
+    fn $name() {
+      let samples: Vec<$native> = samples_of();
+      let max_exp = $native::MAX.ilog10();
+      for &a in &samples {
+        let limbs_a: [Limb; $n] = limbs_of(a);
+        assert_eq!(is_negative(&limbs_a), a < 0);
+        assert_eq!(is_positive(&limbs_a), a > 0);
+        assert_eq!(is_zero(&limbs_a), a == 0);
+        assert_eq!(unsigned_abs(&limbs_a), unsigned_limbs_of(a.unsigned_abs()));
+        if a != $native::MIN {
+          assert_eq!(neg(&limbs_a), limbs_of(-a));
+          assert_eq!(abs(&limbs_a), limbs_of(a.abs()));
+        }
+        for &b in &samples {
+          let limbs_b: [Limb; $n] = limbs_of(b);
+          assert_eq!(cmp(&limbs_a, &limbs_b), a.cmp(&b));
+          assert_eq!(le(&limbs_a, &limbs_b), a <= b);
+          assert_eq!(
+            checked_add(&limbs_a, &limbs_b),
+            a.checked_add(b).map(limbs_of)
+          );
+          assert_eq!(
+            checked_sub(&limbs_a, &limbs_b),
+            a.checked_sub(b).map(limbs_of)
+          );
+          if let Some(product) = a.checked_mul(b) {
+            assert_eq!(mul(&limbs_a, &limbs_b), limbs_of(product));
+          }
+          // As for `/` and `%`, a zero divisor and `MIN / -1` are excluded.
+          if b != 0 && (a, b) != ($native::MIN, -1) {
+            assert_eq!(
+              div_rem(&limbs_a, &limbs_b),
+              (limbs_of(a / b), limbs_of(a % b)),
+              "{a} / {b}"
+            );
+          }
+        }
+        for exp in 0..=max_exp {
+          let power = $native::pow(10, exp);
+          assert_eq!(
+            checked_mul_pow10(&limbs_a, exp),
+            a.checked_mul(power).map(limbs_of)
+          );
+          if let Some(product) = a.checked_mul(power) {
+            assert_eq!(mul_pow10(&limbs_a, exp), limbs_of(product));
+          }
+          // As with `/` and `%`, the quotient and the remainder have the sign of `a`.
+          assert_eq!(
+            div_rem_pow10(&limbs_a, exp),
+            (limbs_of(a / power), limbs_of(a % power))
+          );
+        }
+
+        let mut buf = [0xff; DIGIT_BUF_LEN];
+        let start = write_digits(&limbs_a, &mut buf);
+        assert_eq!(&buf[start..], a.unsigned_abs().to_string().as_bytes());
+        if a >= 0 {
+          let digits = a.to_string();
+          assert_eq!(
+            push_digits(&[0; $n], digits.as_bytes(), 0, digits.len()),
+            limbs_a
+          );
+        }
+      }
+    }
+  };
+}
+
+pub(crate) use native_oracle;
