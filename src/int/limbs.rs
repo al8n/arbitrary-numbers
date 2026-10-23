@@ -35,9 +35,11 @@ const fn div_rem_wide(high: u64, low: u64, divisor: u64) -> (u64, u64) {
 
 limb_layer!(unsigned limb: u64, carrying_mul_add: carrying_mul_add, div_rem_wide: div_rem_wide);
 
-// Pins the derived step to 19 digits, the most that a `u64` holds. A smaller step would give the
-// same results with more limb operations, so no test would notice it.
-const _: () = assert!(MAX_STEP == 19 && TEN_POW == 10_000_000_000_000_000_000);
+// Pins the derived step to 19 digits, the most that a `u64` holds, and the bound on the digits of
+// a limb to 20. A smaller step or a larger bound would give the same results with more limb
+// operations or more stack, so no test would notice it.
+const _: () =
+  assert!(MAX_STEP == 19 && TEN_POW == 10_000_000_000_000_000_000 && DIGITS_PER_LIMB == 20);
 
 #[cfg(test)]
 mod tests;

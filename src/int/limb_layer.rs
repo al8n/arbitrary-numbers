@@ -40,6 +40,10 @@ macro_rules! limb_layer {
     /// `10^MAX_STEP`, the largest power of ten in a limb.
     const TEN_POW: Limb = Limb::pow(10, MAX_STEP);
 
+    /// The most decimal digits that one limb adds to a value: `2^B` is not a power of ten, so it is
+    /// below `10^(MAX_STEP + 1)`.
+    pub(crate) const DIGITS_PER_LIMB: usize = MAX_STEP as usize + 1;
+
     /// One.
     pub(crate) const fn one<const N: usize>() -> [Limb; N] {
       let mut one = [0; N];
@@ -500,8 +504,7 @@ macro_rules! limb_layer {
 
     /// Writes the decimal digits of `value` to the end of `buf`, without leading zeros (zero is a
     /// single `0`), and returns the index of the first digit. Requires `buf` to hold every digit
-    /// of `value`, which `(MAX_STEP + 1) * N` bytes do: `2^B` is not a power of ten, so it is below
-    /// `10^(MAX_STEP + 1)`, and each limb adds at most `MAX_STEP + 1` digits.
+    /// of `value`, which `DIGITS_PER_LIMB * N` bytes do.
     pub(crate) const fn write_digits_into<const N: usize>(
       value: &[Limb; N],
       buf: &mut [u8],
