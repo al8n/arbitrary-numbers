@@ -8,14 +8,22 @@
 //! misses of it; every value must read back from its text, also when that text is rewritten with
 //! an exponent. Each suite covers one decimal type, with a signed or an unsigned storage, native or
 //! wide.
+//!
+//! Rounding is checked against a reference that picks the nearer of the two bracketing multiples by
+//! distance, and `round_to` also against `bigdecimal`, which decides from the first dropped digit
+//! and whether any later one is nonzero; neither shares the crate's rule. Values at and next to
+//! ties are generated for every number of dropped digits, and every mode is checked on each value,
+//! together with the symmetry between a value and its negation.
 
 // Under Miri on a 32-bit target, the `num-bigint` and `proptest` allocations of this suite use up
 // Miri's 32-bit address space. It still runs natively, and under Miri on the 64-bit targets.
 #![cfg(not(all(miri, target_pointer_width = "32")))]
 
+use bigdecimal::BigDecimal;
 use num_bigint::{BigInt, Sign};
 use numo::{
-  ConvertError, Decimal, ParseErrorKind, i192, i256, i320, i384, i448, i512,
+  ConvertError, Decimal, ParseErrorKind, QuantizeError, RoundingMode, i192, i256, i320, i384, i448,
+  i512,
   typenum::{
     U0, U1, U2, U3, U4, U5, U6, U7, U8, U9, U10, U11, U12, U14, U16, U17, U18, U19, U20, U22, U26,
     U28, U36, U37, U38, U39, U49, U58, U59, U60, U61, U69, U70, U76, U78, U79, U90, U96, U97, U98,
@@ -485,7 +493,7 @@ macro_rules! suite {
         value.repr().to_big()
       }
 
-      fn from_big(coeff: &BigInt) -> Option<T> {
+      pub(super) fn from_big(coeff: &BigInt) -> Option<T> {
         <$repr as Repr>::from_big(coeff).and_then(T::from_repr)
       }
 
@@ -1287,3 +1295,436 @@ proptest! {
     }
   }
 }
+
+/// Every rounding mode.
+const MODES: [RoundingMode; 7] = [
+  RoundingMode::Up,
+  RoundingMode::Down,
+  RoundingMode::Ceiling,
+  RoundingMode::Floor,
+  RoundingMode::HalfUp,
+  RoundingMode::HalfDown,
+  RoundingMode::HalfEven,
+];
+
+/// The mode that rounds `-x` as `mode` rounds `x`, negated: `Ceiling` and `Floor` swap, and every
+/// other mode depends only on the magnitude.
+fn mirror(mode: RoundingMode) -> RoundingMode {
+  match mode {
+    RoundingMode::Ceiling => RoundingMode::Floor,
+    RoundingMode::Floor => RoundingMode::Ceiling,
+    other => other,
+  }
+}
+
+/// `value / divisor` rounded to an integer with `mode`, for `divisor > 0`.
+///
+/// Picks between the integers below and above the exact quotient by their distances to it, and
+/// breaks a tie by direction or parity. The crate instead compares the remainder of a division
+/// toward zero with its distance to the divisor.
+fn oracle_round(value: &BigInt, divisor: &BigInt, mode: RoundingMode) -> BigInt {
+  // `floor * divisor <= value < (floor + 1) * divisor`; `/` rounds toward zero.
+  let mut floor = value / divisor;
+  if &floor * divisor > *value {
+    floor -= 1u8;
+  }
+  let below = value - &floor * divisor;
+  if below.sign() == Sign::NoSign {
+    return floor;
+  }
+  let ceiling = &floor + 1u8;
+  let above = &ceiling * divisor - value;
+  let (toward_zero, away_from_zero) = if value.sign() == Sign::Minus {
+    (ceiling.clone(), floor.clone())
+  } else {
+    (floor.clone(), ceiling.clone())
+  };
+  match mode {
+    RoundingMode::Up => away_from_zero,
+    RoundingMode::Down => toward_zero,
+    RoundingMode::Ceiling => ceiling,
+    RoundingMode::Floor => floor,
+    RoundingMode::HalfUp | RoundingMode::HalfDown | RoundingMode::HalfEven => {
+      match below.cmp(&above) {
+        std::cmp::Ordering::Less => floor,
+        std::cmp::Ordering::Greater => ceiling,
+        std::cmp::Ordering::Equal => match mode {
+          RoundingMode::HalfUp => away_from_zero,
+          RoundingMode::HalfDown => toward_zero,
+          _ if (&floor % 2u8).sign() == Sign::NoSign => floor,
+          _ => ceiling,
+        },
+      }
+    }
+  }
+}
+
+/// `coeff` with `digits` digits in total checked against a target with a signed or an unsigned
+/// storage.
+fn in_target(coeff: BigInt, digits: u32, signed: bool) -> Result<BigInt, ConvertError> {
+  if in_range(&coeff, digits) && (signed || coeff.sign() != Sign::Minus) {
+    Ok(coeff)
+  } else {
+    Err(ConvertError::OutOfRange)
+  }
+}
+
+/// The result of rounding `coeff` from `from` to `to` fraction digits with `mode`, for a target
+/// with `digits` digits in total and a signed or an unsigned storage. Without dropped digits, this
+/// is the conversion.
+fn oracle_round_to(
+  coeff: &BigInt,
+  from: u32,
+  to: u32,
+  digits: u32,
+  signed: bool,
+  mode: RoundingMode,
+) -> Result<BigInt, ConvertError> {
+  if to >= from {
+    return oracle_convert(coeff, from, to, digits, signed);
+  }
+  in_target(oracle_round(coeff, &pow10(from - to), mode), digits, signed)
+}
+
+/// The same rounding by `bigdecimal`, from the text of the value.
+fn bigdecimal_round_to(
+  text: &str,
+  to: u32,
+  digits: u32,
+  signed: bool,
+  mode: RoundingMode,
+) -> Result<BigInt, ConvertError> {
+  let mode = match mode {
+    RoundingMode::Up => bigdecimal::RoundingMode::Up,
+    RoundingMode::Down => bigdecimal::RoundingMode::Down,
+    RoundingMode::Ceiling => bigdecimal::RoundingMode::Ceiling,
+    RoundingMode::Floor => bigdecimal::RoundingMode::Floor,
+    RoundingMode::HalfUp => bigdecimal::RoundingMode::HalfUp,
+    RoundingMode::HalfDown => bigdecimal::RoundingMode::HalfDown,
+    RoundingMode::HalfEven => bigdecimal::RoundingMode::HalfEven,
+  };
+  let value: BigDecimal = text.parse().expect("decimal text");
+  let (coeff, scale) = value
+    .with_scale_round(i64::from(to), mode)
+    .into_bigint_and_scale();
+  assert_eq!(scale, i64::from(to));
+  // `bigdecimal` has its own version of `num-bigint`, so the coefficient crosses as text.
+  let coeff: BigInt = coeff.to_string().parse().expect("integer text");
+  in_target(coeff, digits, signed)
+}
+
+/// The multiple of `step` that `mode` selects for `coeff`, with `digits` digits in total.
+fn oracle_quantize(
+  coeff: &BigInt,
+  step: &BigInt,
+  mode: RoundingMode,
+  digits: u32,
+) -> Result<BigInt, QuantizeError> {
+  if step.sign() != Sign::Plus {
+    return Err(QuantizeError::InvalidStep);
+  }
+  let multiple = oracle_round(coeff, step, mode) * step;
+  if in_range(&multiple, digits) {
+    Ok(multiple)
+  } else {
+    Err(QuantizeError::OutOfRange)
+  }
+}
+
+/// Coefficients of at most `digits` digits whose last `dropped` digits are at or next to a tie:
+/// zero, one, `5 * 10^(dropped - 1)` and its neighbors, and `10^dropped - 1`, under random higher
+/// digits, which give both parities, and with a random sign if `signed`.
+fn near_ties(digits: u32, dropped: u32, signed: bool) -> impl Strategy<Value = BigInt> {
+  let unit = pow10(dropped);
+  let half = &unit / 2u8;
+  let lows = vec![
+    BigInt::ZERO,
+    BigInt::from(1u8),
+    &half - 1u8,
+    half.clone(),
+    &half + 1u8,
+    &unit - 1u8,
+  ];
+  let high = if digits > dropped {
+    digit_text((digits - dropped) as usize)
+      .prop_map(|text| text.parse::<BigInt>().expect("ASCII digits"))
+      .boxed()
+  } else {
+    Just(BigInt::ZERO).boxed()
+  };
+  (high, proptest::sample::select(lows), any::<bool>()).prop_map(move |(high, low, negative)| {
+    let magnitude = high * &unit + low;
+    if negative && signed {
+      -magnitude
+    } else {
+      magnitude
+    }
+  })
+}
+
+/// Values of a suite for rounding away `dropped` fraction digits: any value, or one at or next to a
+/// tie.
+fn rounding_values<T: Clone + std::fmt::Debug + 'static>(
+  value: BoxedStrategy<T>,
+  from_big: fn(&BigInt) -> Option<T>,
+  digits: u32,
+  dropped: u32,
+  signed: bool,
+) -> BoxedStrategy<T> {
+  if dropped == 0 {
+    return value;
+  }
+  let ties = near_ties(digits, dropped, signed)
+    .prop_filter_map("outside the decimal range", move |coeff| from_big(&coeff));
+  prop_oneof![value, ties].boxed()
+}
+
+macro_rules! round {
+  ($name:ident: $source:ident -> $target:ident) => {
+    proptest! {
+      #![proptest_config(config())]
+
+      #[test]
+      fn $name(
+        a in rounding_values(
+          $source::value(),
+          $source::from_big,
+          $source::DIGITS,
+          $source::FRACTION.saturating_sub($target::FRACTION),
+          $source::SIGNED,
+        ),
+      ) {
+        let big_a = $source::big(a);
+        let text = a.to_string();
+        let negated = $source::from_big(&-&big_a);
+        for mode in MODES {
+          let rounded: Result<$target::T, ConvertError> = a.round_to(mode);
+          let rounded = rounded.map($target::big);
+          let expected = oracle_round_to(
+            &big_a,
+            $source::FRACTION,
+            $target::FRACTION,
+            $target::DIGITS,
+            $target::SIGNED,
+            mode,
+          );
+          prop_assert_eq!(&rounded, &expected, "{} {:?}", text, mode);
+          let decimal =
+            bigdecimal_round_to(&text, $target::FRACTION, $target::DIGITS, $target::SIGNED, mode);
+          prop_assert_eq!(&rounded, &decimal, "{} {:?} against bigdecimal", text, mode);
+          if $target::FRACTION >= $source::FRACTION {
+            let converted: Result<$target::T, ConvertError> = a.try_convert();
+            prop_assert_eq!(&rounded, &converted.map($target::big), "{} {:?}", text, mode);
+          }
+          // `round(-x, m) == -round(x, mirror(m))` between signed types.
+          if let (true, Some(negated)) = ($target::SIGNED, negated) {
+            let mirrored: Result<$target::T, ConvertError> = negated.round_to(mirror(mode));
+            prop_assert_eq!(
+              mirrored.map(|value| -$target::big(value)),
+              rounded,
+              "{} {:?}",
+              text,
+              mode
+            );
+          }
+        }
+      }
+    }
+  };
+}
+
+// One fraction digit and a few, between native storages of either sign.
+round!(round_i8_one_digit: d1x1 -> d2x0);
+round!(round_i8_fraction_one_digit: d0x2 -> d1x1);
+round!(round_i8_fraction_two_digits: d0x2 -> d2x0);
+round!(round_i32_to_i16: d4x5 -> d3x1);
+round!(round_to_fewer_integral_digits: d10x8 -> d2x2_in_i64);
+round!(round_i128_to_i64: d10x10 -> d10x8);
+round!(round_unsigned_one_digit: u0x2 -> u1x1);
+round!(round_u64_nine_digits: u10x9 -> u10x0);
+round!(round_u128_to_u32: u10x10 -> u4x5);
+// Without dropped digits, rounding is the conversion.
+round!(round_same_fraction_fewer_integral_digits: d12x8 -> d10x8);
+round!(round_same_fraction_more_integral_digits: d10x8 -> d12x8);
+round!(round_to_more_fraction_digits: d1x1 -> d19x19);
+// Up to 38 dropped digits, within and across the 19-digit steps of the limb operations.
+round!(round_i128_eighteen_digits: d19x19 -> d1x1);
+round!(round_i128_nineteen_digits: d19x19 -> d19x0);
+round!(round_i128_thirty_six_digits: d0x38 -> d0x2);
+round!(round_i128_thirty_seven_digits: d0x38 -> d1x1);
+round!(round_i128_thirty_eight_digits: d0x38 -> d38x0);
+round!(round_i128_fraction_to_integral: d0x36 -> d2x0);
+round!(round_unsigned_eighteen_digits: u19x19 -> u1x1);
+// Between signs: a negative value converts to an unsigned storage only when it rounds to zero.
+round!(round_unsigned_to_signed: u10x9 -> d10x8);
+round!(round_signed_to_unsigned_without_dropped_digits: d10x8 -> u10x9);
+round!(round_signed_fraction_to_unsigned: d0x38 -> u1x1);
+round!(round_signed_to_unsigned_nineteen_digits: d19x19 -> u19x0);
+round!(round_signed_wide_to_unsigned_wide: w78x18 -> uw78x18);
+round!(round_signed_wide_to_unsigned_without_dropped_digits: w153x0 -> u1x1);
+// From wide storages, by every number of dropped digits up to 154.
+round!(round_i192_to_i64: w39x18 -> d10x8);
+round!(round_i192_to_fewer_integral_digits: w20x19 -> d19x0);
+round!(round_i192_one_digit: w20x19 -> w39x18);
+round!(round_u192_one_digit: uw20x19 -> uw39x18);
+round!(round_i128_to_i192_twenty_digits: d0x38 -> w39x18);
+round!(round_i256_to_i8: w58x18 -> d2x0);
+round!(round_u320_to_u64: uw78x18 -> u10x9);
+round!(round_uint256_to_u64: uint256 -> u10x9);
+round!(round_i320_seventy_eight_digits: w0x96 -> w39x18);
+round!(round_i320_ninety_five_digits: w0x96 -> d1x1);
+round!(round_i320_ninety_six_digits: w0x96 -> w96x0);
+round!(round_i384_to_i128: w97x18 -> d12x8);
+round!(round_u448_same_fraction: uw116x18 -> uw97x18);
+round!(round_i512_same_fraction: w135x18 -> w116x18);
+round!(round_i512_fewer_integral_digits: w117x18 -> w97x18);
+round!(round_u512_to_i64: uw135x18 -> d10x8);
+round!(round_i512_one_digit: d2x2_in_i512 -> d1x1);
+round!(round_i512_one_hundred_fifty_one_digits: w0x153 -> d0x2);
+round!(round_i512_one_hundred_fifty_two_digits: w0x153 -> d1x1);
+round!(round_i512_one_hundred_fifty_three_digits: w0x153 -> w153x0);
+round!(round_i512_to_more_fraction_digits: w0x153 -> uw0x154);
+round!(round_u512_one_hundred_fifty_three_digits: uw0x154 -> u1x1);
+round!(round_u512_one_hundred_fifty_four_digits: uw0x154 -> uw154x0);
+
+/// How a test of `quantize` picks its step.
+#[derive(Clone, Debug)]
+enum Step {
+  /// A fixed coefficient.
+  Fixed(BigInt),
+  /// The value itself.
+  Value,
+  /// The magnitude of the value plus this offset, so that the quotient is zero.
+  AboveValue(BigInt),
+}
+
+/// Steps for values of `digits` digits: 1, 5, `25 * 10^k`, `10^k`, random values of one to three
+/// digits, random coefficients from `coeff`, the value itself and steps above the value.
+fn steps(digits: u32, coeff: BoxedStrategy<BigInt>) -> impl Strategy<Value = Step> {
+  prop_oneof![
+    Just(Step::Fixed(BigInt::from(1u8))),
+    Just(Step::Fixed(BigInt::from(5u8))),
+    (0..digits - 1).prop_map(|k| Step::Fixed(pow10(k) * 25u8)),
+    (0..digits).prop_map(|k| Step::Fixed(pow10(k))),
+    (1u32..1000).prop_map(|step| Step::Fixed(BigInt::from(step))),
+    coeff.prop_map(Step::Fixed),
+    Just(Step::Value),
+    (1u32..1000).prop_map(|offset| Step::AboveValue(BigInt::from(offset))),
+  ]
+}
+
+macro_rules! quantize {
+  ($name:ident: $suite:ident) => {
+    proptest! {
+      #![proptest_config(config())]
+
+      #[test]
+      fn $name(
+        a in $suite::value(),
+        step in steps($suite::DIGITS, $suite::coeff().prop_map(|coeff| coeff.to_big()).boxed()),
+        negative_step in proptest::bool::weighted(0.125),
+      ) {
+        use RoundingMode::{Down, HalfDown, HalfEven, HalfUp};
+
+        let big_a = $suite::big(a);
+        let big_step = match step {
+          Step::Fixed(step) => step,
+          Step::Value => big_a.clone(),
+          Step::AboveValue(offset) => BigInt::from(big_a.magnitude().clone()) + offset,
+        };
+        let big_step = if negative_step { -big_step } else { big_step };
+        let Some(step) = $suite::from_big(&big_step) else {
+          // Outside the range of the type.
+          return Ok(());
+        };
+
+        for mode in MODES {
+          prop_assert_eq!(
+            a.quantize(step, mode).map($suite::big),
+            oracle_quantize(&big_a, &big_step, mode, $suite::DIGITS),
+            "{} by {} {:?}",
+            a,
+            step,
+            mode
+          );
+          // The smallest unit leaves every value unchanged.
+          let unit = $suite::from_big(&BigInt::from(1u8)).expect("one unit fits");
+          prop_assert_eq!(a.quantize(unit, mode), Ok(a));
+        }
+        let multiple = if big_step.sign() == Sign::NoSign {
+          big_a.sign() == Sign::NoSign
+        } else {
+          (&big_a % &big_step).sign() == Sign::NoSign
+        };
+        prop_assert_eq!(a.is_multiple_of(step), multiple, "{} by {}", a, step);
+        if big_step.sign() == Sign::Plus {
+          prop_assert_eq!(a.is_multiple_of(step), a.quantize(step, Down) == Ok(a));
+          if multiple {
+            for mode in MODES {
+              prop_assert_eq!(a.quantize(step, mode), Ok(a));
+            }
+          }
+          // An odd step has no ties, so the half modes agree.
+          if (&big_step % 2u8).sign() != Sign::NoSign {
+            let half_up = a.quantize(step, HalfUp);
+            prop_assert_eq!(half_up, a.quantize(step, HalfDown));
+            prop_assert_eq!(half_up, a.quantize(step, HalfEven));
+          }
+          // Below the step, the quotient is zero, and the result is zero or one step.
+          if big_a.magnitude() < big_step.magnitude() {
+            for mode in MODES {
+              if let Ok(rounded) = a.quantize(step, mode) {
+                let rounded = $suite::big(rounded);
+                prop_assert!(
+                  rounded.sign() == Sign::NoSign || rounded.magnitude() == big_step.magnitude()
+                );
+              }
+            }
+          }
+        }
+        // `quantize(-x, m) == -quantize(x, mirror(m))` for a signed type.
+        if let Some(negated) = $suite::from_big(&-&big_a) {
+          for mode in MODES {
+            prop_assert_eq!(
+              negated.quantize(step, mirror(mode)).map(|value| -$suite::big(value)),
+              a.quantize(step, mode).map($suite::big),
+              "{} by {} {:?}",
+              a,
+              step,
+              mode
+            );
+          }
+        }
+      }
+    }
+  };
+}
+
+quantize!(quantize_i8: d1x1);
+quantize!(quantize_i8_fraction: d0x2);
+quantize!(quantize_i8_integral: d2x0);
+quantize!(quantize_i32: d4x5);
+quantize!(quantize_i64: d10x8);
+quantize!(quantize_i128: d19x19);
+quantize!(quantize_i128_integral: d38x0);
+quantize!(quantize_i128_fraction: d0x38);
+quantize!(quantize_u8: u1x1);
+quantize!(quantize_u8_fraction: u0x2);
+quantize!(quantize_u64: u10x9);
+quantize!(quantize_u64_limit: u19x0);
+quantize!(quantize_u128: u19x19);
+quantize!(quantize_u128_integral: u38x0);
+quantize!(quantize_i192: w20x19);
+quantize!(quantize_i192_limit: w39x18);
+quantize!(quantize_i256: w58x18);
+quantize!(quantize_i320_integral: w96x0);
+quantize!(quantize_i320_fraction: w0x96);
+quantize!(quantize_i512: w135x18);
+quantize!(quantize_i512_integral: w153x0);
+quantize!(quantize_i512_fraction: w0x153);
+quantize!(quantize_few_digits_in_i512: d2x2_in_i512);
+quantize!(quantize_u192: uw39x18);
+quantize!(quantize_uint256: uint256);
+quantize!(quantize_u512: uw135x18);
+quantize!(quantize_u512_integral: uw154x0);
+quantize!(quantize_u512_fraction: uw0x154);

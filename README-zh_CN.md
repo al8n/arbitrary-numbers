@@ -78,10 +78,11 @@ fn main() -> Result<(), ParseError> {
 - 位数为 0、超过 154 位或 `Repr` 放不下时，类型检查阶段就会报错。使用默认 `Repr` 时，位数为 0
   或超过 153 位的类型在任何写出它的地方都无法通过编译；显式指定 `Repr` 时，该类型的常量和构造函数
   无法通过编译，因此无法创建它的值。类型本身不带约束，泛型代码存放和传递这些值时不需要任何约束。
-- 所有运算都精确：`checked_add` 与 `checked_sub` 超出范围时返回 `None`；`exact_mul`
+- 所有运算要么精确，要么失败：`checked_add` 与 `checked_sub` 超出范围时返回 `None`；`exact_mul`
   返回一定放得下乘积的更宽类型，乘积最多 153 位；`widen` 转换到位数不少于原类型的类型；`try_convert`
-  在超出范围或会丢失位数时返回 `OutOfRange` 或 `Inexact`，从不舍入。不提供 `+`、`-`、`*`、`/`
-  运算符。
+  在超出范围或会丢失位数时返回 `OutOfRange` 或 `Inexact`，从不舍入。只有显式给出 `RoundingMode`
+  的地方才会舍入：`round_to` 转换到小数位更少的类型，`quantize` 舍入到步长的整数倍。不提供
+  `+`、`-`、`*`、`/` 运算符。
 - 转换遵循存储的符号：两个无符号存储的乘积用无符号存储，其他乘积用有符号存储；`widen`
   可以把无符号存储转换为任何存储，但有符号存储只能转换为有符号存储；`try_convert`
   把负数转换为无符号存储时返回 `OutOfRange`。
@@ -127,8 +128,7 @@ fn main() -> Result<(), ParseError> {
 
 #### License
 
-`numo` is under the terms of both the MIT license and the
-Apache License (Version 2.0).
+`numo` is dual-licensed under the MIT license or the Apache License (Version 2.0), at your option.
 
 See [LICENSE-APACHE](LICENSE-APACHE), [LICENSE-MIT](LICENSE-MIT) for details.
 

@@ -201,6 +201,12 @@ macro_rules! wide_integer {
     pub const fn to_limbs(self) -> [u64; $limbs] {
       self.repr
     }
+
+    /// Borrows the limbs, which the integer core takes by reference.
+    #[inline]
+    pub(crate) const fn as_limbs(&self) -> &[u64; $limbs] {
+      &self.repr
+    }
   };
   // Trait methods cannot be `const`.
   (@traits $name:ident) => {

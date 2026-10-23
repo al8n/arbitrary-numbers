@@ -84,10 +84,12 @@ fn main() -> Result<(), ParseError> {
   written; with an explicit `Repr`, the type's constants and constructors fail, so no value of it
   can be created. The type itself has no bounds, so generic code can store and pass values
   without any.
-- Every operation is exact. `checked_add` and `checked_sub` return `None` outside the range,
-  `exact_mul` returns a wider type that always holds the product, up to 153 digits, `widen`
+- Every operation is exact or fails. `checked_add` and `checked_sub` return `None` outside the
+  range, `exact_mul` returns a wider type that always holds the product, up to 153 digits, `widen`
   converts to a type with at least as many digits, and `try_convert` reports `OutOfRange` or
-  `Inexact` instead of rounding. There are no `+`, `-`, `*` or `/` operators.
+  `Inexact` instead of rounding. Rounding happens only where an explicit `RoundingMode` is given:
+  `round_to` converts to fewer fraction digits, and `quantize` rounds to a multiple of a step.
+  There are no `+`, `-`, `*` or `/` operators.
 - Conversions follow the sign of the storage. The product of two unsigned storages is unsigned,
   and any other product is signed. `widen` converts an unsigned storage to any storage, but a
   signed storage only to a signed one. `try_convert` reports a negative value converted to an
@@ -140,8 +142,7 @@ limb types are planned.
 
 #### License
 
-`numo` is under the terms of both the MIT license and the
-Apache License (Version 2.0).
+`numo` is dual-licensed under the MIT license or the Apache License (Version 2.0), at your option.
 
 See [LICENSE-APACHE](LICENSE-APACHE), [LICENSE-MIT](LICENSE-MIT) for details.
 

@@ -1,9 +1,67 @@
 //! Helpers for the unit tests that compare with `num-bigint`: conversions between limb arrays and
-//! big integers, the limits and powers of ten that they test, and fewer samples and exponents under
-//! Miri.
+//! big integers, the limits and powers of ten that they test, rounding by distance, and fewer
+//! samples and exponents under Miri.
+
+use core::cmp::Ordering;
 
 use num_bigint::{BigInt, Sign};
 use std::vec::Vec;
+
+use crate::RoundingMode;
+
+/// Every rounding mode.
+pub(crate) const MODES: [RoundingMode; 7] = [
+  RoundingMode::Up,
+  RoundingMode::Down,
+  RoundingMode::Ceiling,
+  RoundingMode::Floor,
+  RoundingMode::HalfUp,
+  RoundingMode::HalfDown,
+  RoundingMode::HalfEven,
+];
+
+/// `value / divisor` rounded to an integer with `mode`, for `divisor > 0`.
+///
+/// Picks between the integers below and above the exact quotient by their distances to it, and
+/// breaks a tie by direction or parity. The crate instead compares the remainder of a division
+/// toward zero with its distance to the divisor.
+pub(crate) fn round(value: &BigInt, divisor: &BigInt, mode: RoundingMode) -> BigInt {
+  // `floor * divisor <= value < (floor + 1) * divisor`; `/` rounds toward zero.
+  let mut floor = value / divisor;
+  if &floor * divisor > *value {
+    floor -= 1u8;
+  }
+  let below = value - &floor * divisor;
+  if below.sign() == Sign::NoSign {
+    return floor;
+  }
+  let ceiling = &floor + 1u8;
+  let above = &ceiling * divisor - value;
+  let negative = value.sign() == Sign::Minus;
+  let (toward_zero, away_from_zero) = if negative {
+    (ceiling.clone(), floor.clone())
+  } else {
+    (floor.clone(), ceiling.clone())
+  };
+  match mode {
+    RoundingMode::Up => away_from_zero,
+    RoundingMode::Down => toward_zero,
+    RoundingMode::Ceiling => ceiling,
+    RoundingMode::Floor => floor,
+    RoundingMode::HalfUp | RoundingMode::HalfDown | RoundingMode::HalfEven => {
+      match below.cmp(&above) {
+        Ordering::Less => floor,
+        Ordering::Greater => ceiling,
+        Ordering::Equal => match mode {
+          RoundingMode::HalfUp => away_from_zero,
+          RoundingMode::HalfDown => toward_zero,
+          _ if (&floor % 2u8).sign() == Sign::NoSign => floor,
+          _ => ceiling,
+        },
+      }
+    }
+  }
+}
 
 /// The integer that `limbs` holds, least significant limb first, in two's complement if `signed`.
 pub(crate) fn from_limbs(limbs: &[u64], signed: bool) -> BigInt {

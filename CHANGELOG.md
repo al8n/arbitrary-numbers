@@ -26,6 +26,19 @@ FEATURES
     digits, and `widen` and `try_convert` convert between native and wide storages. The 154th digit
     is available only with an explicit `u512`, as in `Decimal<U154, U0, u512>`, because no signed
     storage holds it.
+- `RoundingMode`, with the modes `Up`, `Down`, `Ceiling`, `Floor`, `HalfUp`, `HalfDown` and
+  `HalfEven`. Rounding happens only where a mode is given, for native and wide storages alike:
+  - `round_to` converts to any decimal type as `try_convert` does, but rounds dropped fraction
+    digits with the mode instead of failing. It reports `OutOfRange` if the rounded value does not
+    fit, so a negative value converts to an unsigned storage only when it rounds to zero.
+  - `const fn` `quantize` rounds to a multiple of a step of the same type with the mode, and reports
+    the new `QuantizeError`: `InvalidStep` for a step that is zero or negative, and `OutOfRange` for
+    a multiple outside the range.
+  - `const fn` `is_multiple_of` checks a value against a step without rounding it.
+- The `serde` feature: `Decimal` is written as its text and read from a string, never from a number,
+  in every format, and `RoundingMode` as the name of its variant, without allocation. The impls use
+  `serde_core`, so they need `serde` 1.0.220 or later in the build; the feature enables no feature
+  of any other crate.
 - `Uint<Bits, Repr>` and `Int<Bits, Repr>`, with the aliases `u192`, `u256`, `u320`, `u384`, `u448`,
   `u512`, `i192`, `i256`, `i320`, `i384`, `i448` and `i512` over 64-bit limbs: `const fn`
   `from_limbs` and `to_limbs` (least significant limb first, two's complement for `Int`), `ZERO`,

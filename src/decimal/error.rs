@@ -57,7 +57,9 @@ pub enum ParseErrorKind {
   Inexact,
 }
 
-/// The error returned by [`Decimal::try_convert`](crate::Decimal::try_convert).
+/// The error returned by [`Decimal::try_convert`](crate::Decimal::try_convert) and
+/// [`Decimal::round_to`](crate::Decimal::round_to), which returns only
+/// [`OutOfRange`](Self::OutOfRange).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum ConvertError {
@@ -77,3 +79,24 @@ impl fmt::Display for ConvertError {
 }
 
 impl core::error::Error for ConvertError {}
+
+/// The error returned by [`Decimal::quantize`](crate::Decimal::quantize).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum QuantizeError {
+  /// The step is zero or negative.
+  InvalidStep,
+  /// The selected multiple of the step is outside the range of the type.
+  OutOfRange,
+}
+
+impl fmt::Display for QuantizeError {
+  fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    f.write_str(match self {
+      Self::InvalidStep => "step must be positive",
+      Self::OutOfRange => "quantized decimal out of range of the type",
+    })
+  }
+}
+
+impl core::error::Error for QuantizeError {}

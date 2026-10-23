@@ -4,9 +4,13 @@
 macro_rules! core_tests {
   ($($sign:ident $int:ident),+ $(,)?) => {$(
     mod $int {
+      use num_bigint::BigInt;
       use std::{string::ToString, vec::Vec};
 
-      use crate::int::{$int as native, DIGIT_BUF_LEN};
+      use crate::{
+        bigint,
+        int::{$int as native, DIGIT_BUF_LEN},
+      };
 
       /// Whether `10^exp` is representable.
       fn representable(exp: u32) -> bool {
@@ -80,6 +84,34 @@ macro_rules! core_tests {
             }
             // As with `/` and `%`, the quotient and the remainder have the sign of `a`.
             assert_eq!(native::div_rem_pow10(a, exp), (a / power, a % power));
+          }
+        }
+      }
+
+      #[test]
+      fn division_and_rounding() {
+        let samples = bigint::thin(samples());
+        for &a in &samples {
+          // As for `/` and `%`, a zero divisor and `MIN / -1` are excluded.
+          for &b in samples.iter().filter(|&&b| a.checked_div(b).is_some()) {
+            assert_eq!(native::div_rem(a, b), (a / b, a % b), "{a} / {b}");
+          }
+        }
+        // Rounding by positive divisors, for fewer pairs under Miri, which runs big integers
+        // slowly.
+        let stride = if cfg!(miri) { 4 } else { 1 };
+        let divisors: Vec<$int> =
+          samples.iter().copied().filter(|&b| b > 0).step_by(stride).collect();
+        for &a in samples.iter().step_by(stride) {
+          for &b in &divisors {
+            let (big_a, big_b) = (BigInt::from(a), BigInt::from(b));
+            for mode in bigint::MODES {
+              let (rounded, remainder, away) = native::round_div(a, b, mode);
+              let expected = bigint::round(&big_a, &big_b, mode);
+              assert_eq!(BigInt::from(rounded), expected, "{a} / {b}, {mode:?}");
+              assert_eq!(remainder, a % b);
+              assert_eq!(away, rounded != a / b);
+            }
           }
         }
       }
@@ -364,6 +396,39 @@ macro_rules! wide_tests {
           for &(b, ref big_b) in &samples {
             if let Some(product) = from_big(&(big_a * big_b)) {
               assert_eq!(wide::mul(a, b), product, "{a:?} * {b:?}");
+            }
+          }
+        }
+      }
+
+      #[test]
+      fn division_and_rounding() {
+        let samples = with_big(edges());
+        let minus_one = BigInt::from(-1);
+        for &(a, ref big_a) in &samples {
+          // As for `/` and `%`, a zero divisor and `MIN / -1` are excluded.
+          for &(b, ref big_b) in &samples {
+            if big_b.sign() == Sign::NoSign || (*big_a == min() && *big_b == minus_one) {
+              continue;
+            }
+            let (quotient, remainder) = wide::div_rem(a, b);
+            assert_eq!(big(quotient), big_a / big_b, "{a:?} / {b:?}");
+            assert_eq!(big(remainder), big_a % big_b, "{a:?} % {b:?}");
+          }
+        }
+        // Rounding by positive divisors, for fewer pairs under Miri, which runs big integers
+        // slowly.
+        let stride = if cfg!(miri) { 3 } else { 1 };
+        for &(a, ref big_a) in samples.iter().step_by(stride) {
+          let divisors = samples.iter().filter(|(_, big_b)| big_b.sign() == Sign::Plus);
+          for &(b, ref big_b) in divisors.step_by(stride) {
+            let truncated = big_a / big_b;
+            for mode in bigint::MODES {
+              let (rounded, remainder, away) = wide::round_div(a, b, mode);
+              let expected = bigint::round(big_a, big_b, mode);
+              assert_eq!(big(rounded), expected, "{a:?} / {b:?}, {mode:?}");
+              assert_eq!(big(remainder), big_a % big_b);
+              assert_eq!(away, big(rounded) != truncated);
             }
           }
         }

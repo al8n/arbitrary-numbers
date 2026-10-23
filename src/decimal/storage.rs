@@ -2,9 +2,10 @@ use core::{ops::Neg, str::FromStr};
 
 use typenum::NonZero;
 
-use super::{Decimal, ParseError, parse};
+use super::{Decimal, ParseError, QuantizeError, parse};
 use crate::{
-  i192, i256, i320, i384, i448, i512, int, layout::Layout, u192, u256, u320, u384, u448, u512,
+  i192, i256, i320, i384, i448, i512, int, layout::Layout, rounding::RoundingMode, u192, u256,
+  u320, u384, u448, u512,
 };
 
 /// Implements the constants, `const fn` methods and traits that depend only on the storage, for
@@ -44,6 +45,24 @@ macro_rules! storage_decimal {
       #[inline]
       fn from_str(s: &str) -> Result<Self, ParseError> {
         Self::parse(s)
+      }
+    }
+
+    #[cfg(feature = "serde")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "serde")))]
+    impl<'de, I, F> serde_core::Deserialize<'de> for Decimal<I, F, $repr>
+    where
+      (I, F): Layout<$repr>,
+    {
+      /// Reads a decimal from a string in the syntax of [`parse`](Self::parse), in every format.
+      /// Any other input, such as a number, is rejected, so a decimal never passes through a
+      /// binary floating-point value; a string that does not parse reports its
+      /// [`ParseError`](crate::ParseError).
+      fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+      where
+        D: serde_core::Deserializer<'de>,
+      {
+        deserializer.deserialize_str(crate::serde::TextVisitor::new())
       }
     }
   )+};
@@ -169,7 +188,7 @@ macro_rules! storage_decimal {
       /// # Examples
       ///
       /// ```
-      #[doc = storage_decimal!(@use signed $kind $repr)]
+      #[doc = storage_decimal!(@use "Decimal, ParseErrorKind", signed $kind $repr)]
       ///
       #[doc = concat!("type D = Decimal<U1, U1, ", stringify!($repr), ">;")]
       ///
@@ -224,6 +243,99 @@ macro_rules! storage_decimal {
           Some(difference) if Self::in_range(difference) => Some(Self::from_coeff(difference)),
           _ => None,
         }
+      }
+
+      /// Rounds to a multiple of `step` with `mode`: returns the multiple of `step` that `mode`
+      /// selects among the two multiples bracketing `self`, as [`RoundingMode`] describes. A
+      /// multiple of `step` is returned unchanged, and a negative value that rounds to zero gives
+      /// zero, which has no sign. With [`HalfEven`](RoundingMode::HalfEven), a tie goes to the
+      /// multiple with the even quotient.
+      ///
+      /// `step` has the type of `self`; [`try_convert`](Self::try_convert) a step of another type
+      /// first. To round a quantity that may be negative down to a step, use
+      /// [`Down`](RoundingMode::Down), which rounds toward zero, not
+      /// [`Floor`](RoundingMode::Floor), which rounds a negative value away from zero.
+      ///
+      /// # Errors
+      ///
+      /// Returns [`QuantizeError::InvalidStep`] if `step` is zero or negative. Zero is a step
+      /// like any other, of which only zero is a multiple, so no other value has a multiple to
+      /// round to. A negative step is rejected rather than taken as its magnitude, unlike in
+      /// [`is_multiple_of`](Self::is_multiple_of), which has no error to report. Returns
+      /// [`QuantizeError::OutOfRange`] if the selected multiple is outside the range of the type,
+      /// which only rounding away from zero can cause.
+      ///
+      /// # Examples
+      ///
+      /// ```
+      #[doc = storage_decimal!(@use "Decimal, QuantizeError, RoundingMode", signed $kind $repr)]
+      ///
+      #[doc = concat!("type D = Decimal<U1, U1, ", stringify!($repr), ">;")]
+      ///
+      /// let step = D::parse("0.5")?;
+      /// let value = D::parse("2.3")?;
+      /// assert_eq!(value.quantize(step, RoundingMode::Up)?, D::parse("2.5")?);
+      /// assert_eq!(value.quantize(step, RoundingMode::Down)?, D::parse("2")?);
+      /// assert_eq!(value.quantize(step, RoundingMode::HalfEven)?, D::parse("2.5")?);
+      /// assert!(!value.is_multiple_of(step));
+      ///
+      /// // 2.1 lies halfway between 2 and 2.2, which are 10 and 11 steps of 0.2.
+      /// let tick = D::parse("0.2")?;
+      /// let tie = D::parse("2.1")?;
+      /// assert_eq!(tie.quantize(tick, RoundingMode::HalfEven)?, D::parse("2")?);
+      /// assert_eq!(tie.quantize(tick, RoundingMode::HalfUp)?, D::parse("2.2")?);
+      ///
+      /// // A negative quantity rounds down to a step with `Down`.
+      /// let short = D::parse("-2.3")?;
+      /// assert_eq!(short.quantize(step, RoundingMode::Down)?, D::parse("-2")?);
+      /// assert_eq!(short.quantize(step, RoundingMode::Floor)?, D::parse("-2.5")?);
+      ///
+      /// assert_eq!(value.quantize(D::ZERO, RoundingMode::Up), Err(QuantizeError::InvalidStep));
+      /// assert_eq!(value.quantize(-step, RoundingMode::Up), Err(QuantizeError::InvalidStep));
+      /// // 9.9 rounds up to 10, which has two integral digits.
+      /// assert_eq!(D::MAX.quantize(step, RoundingMode::Up), Err(QuantizeError::OutOfRange));
+      /// # Ok::<(), Box<dyn core::error::Error>>(())
+      /// ```
+      #[must_use = "this returns the rounded value, without modifying the original"]
+      pub const fn quantize(self, step: Self, mode: RoundingMode) -> Result<Self, QuantizeError> {
+        if !int::$repr::is_positive(step.repr) {
+          return Err(QuantizeError::InvalidStep);
+        }
+        let (_, remainder, away) = int::$repr::round_div(self.repr, step.repr, mode);
+        // The remainder has the sign of `self` and a smaller magnitude, so the multiple toward
+        // zero, `self - remainder`, exists and is in range. Only the step away from zero can leave
+        // the storage or the decimal range.
+        let rounded = match int::$repr::checked_sub(self.repr, remainder) {
+          Some(toward_zero) if away => {
+            if int::$repr::is_negative(self.repr) {
+              int::$repr::checked_sub(toward_zero, step.repr)
+            } else {
+              int::$repr::checked_add(toward_zero, step.repr)
+            }
+          }
+          toward_zero => toward_zero,
+        };
+        match rounded {
+          Some(coeff) if Self::in_range(coeff) => Ok(Self::from_coeff(coeff)),
+          _ => Err(QuantizeError::OutOfRange),
+        }
+      }
+
+      /// Returns `true` if `self` is a multiple of `step`, an integer number of steps, without
+      /// rounding anything: for example, whether a price is on a tick.
+      ///
+      /// Zero is a step like any other, of which only zero is a multiple. A negative step counts
+      /// as its magnitude, because this method has no error to report, while
+      /// [`quantize`](Self::quantize) rejects a step that is zero or negative.
+      #[must_use]
+      #[inline]
+      pub const fn is_multiple_of(&self, step: Self) -> bool {
+        if int::$repr::is_zero(step.repr) {
+          return int::$repr::is_zero(self.repr);
+        }
+        // A coefficient is never `MIN`, so the division does not overflow, even for a step of
+        // `-1`.
+        int::$repr::is_zero(int::$repr::div_rem(self.repr, step.repr).1)
       }
 
       /// Returns `-self`. Never fails, because the range is symmetric.
@@ -368,7 +480,7 @@ macro_rules! storage_decimal {
       /// # Examples
       ///
       /// ```
-      #[doc = storage_decimal!(@use unsigned $kind $repr)]
+      #[doc = storage_decimal!(@use "Decimal, ParseErrorKind", unsigned $kind $repr)]
       ///
       #[doc = concat!("type D = Decimal<U1, U1, ", stringify!($repr), ">;")]
       ///
@@ -419,26 +531,93 @@ macro_rules! storage_decimal {
           None => None,
         }
       }
+
+      /// Rounds to a multiple of `step` with `mode`: returns the multiple of `step` that `mode`
+      /// selects among the two multiples bracketing `self`, as [`RoundingMode`] describes. A
+      /// multiple of `step` is returned unchanged. With [`HalfEven`](RoundingMode::HalfEven), a tie
+      /// goes to the multiple with the even quotient. The value is never negative, so
+      /// [`Ceiling`](RoundingMode::Ceiling) rounds as [`Up`](RoundingMode::Up) does and
+      /// [`Floor`](RoundingMode::Floor) as [`Down`](RoundingMode::Down) does.
+      ///
+      /// `step` has the type of `self`; [`try_convert`](Self::try_convert) a step of another type
+      /// first.
+      ///
+      /// # Errors
+      ///
+      /// Returns [`QuantizeError::InvalidStep`] if `step` is zero. Zero is a step like any other,
+      /// of which only zero is a multiple, so no other value has a multiple to round to; unlike
+      /// [`is_multiple_of`](Self::is_multiple_of), which has no error to report, this rejects it.
+      /// Returns [`QuantizeError::OutOfRange`] if the selected multiple is outside the range of
+      /// the type, which only rounding up can cause.
+      ///
+      /// # Examples
+      ///
+      /// ```
+      #[doc = storage_decimal!(@use "Decimal, QuantizeError, RoundingMode", unsigned $kind $repr)]
+      ///
+      #[doc = concat!("type D = Decimal<U1, U1, ", stringify!($repr), ">;")]
+      ///
+      /// let step = D::parse("0.5")?;
+      /// let value = D::parse("2.3")?;
+      /// assert_eq!(value.quantize(step, RoundingMode::Up)?, D::parse("2.5")?);
+      /// assert_eq!(value.quantize(step, RoundingMode::Down)?, D::parse("2")?);
+      /// assert_eq!(value.quantize(step, RoundingMode::HalfEven)?, D::parse("2.5")?);
+      /// assert!(!value.is_multiple_of(step));
+      ///
+      /// // 2.1 lies halfway between 2 and 2.2, which are 10 and 11 steps of 0.2.
+      /// let tick = D::parse("0.2")?;
+      /// let tie = D::parse("2.1")?;
+      /// assert_eq!(tie.quantize(tick, RoundingMode::HalfEven)?, D::parse("2")?);
+      /// assert_eq!(tie.quantize(tick, RoundingMode::HalfUp)?, D::parse("2.2")?);
+      ///
+      /// assert_eq!(value.quantize(D::ZERO, RoundingMode::Up), Err(QuantizeError::InvalidStep));
+      /// // 9.9 rounds up to 10, which has two integral digits.
+      /// assert_eq!(D::MAX.quantize(step, RoundingMode::Up), Err(QuantizeError::OutOfRange));
+      /// # Ok::<(), Box<dyn core::error::Error>>(())
+      /// ```
+      #[must_use = "this returns the rounded value, without modifying the original"]
+      pub const fn quantize(self, step: Self, mode: RoundingMode) -> Result<Self, QuantizeError> {
+        if !int::$repr::is_positive(step.repr) {
+          return Err(QuantizeError::InvalidStep);
+        }
+        let (_, remainder, away) = int::$repr::round_div(self.repr, step.repr, mode);
+        // The remainder is at most `self`, so the multiple below, `self - remainder`, exists and is
+        // in range. Only the step up can leave the storage or the decimal range.
+        let rounded = match int::$repr::checked_sub(self.repr, remainder) {
+          Some(below) if away => int::$repr::checked_add(below, step.repr),
+          below => below,
+        };
+        match rounded {
+          Some(coeff) if Self::in_range(coeff) => Ok(Self::from_coeff(coeff)),
+          _ => Err(QuantizeError::OutOfRange),
+        }
+      }
+
+      /// Returns `true` if `self` is a multiple of `step`, an integer number of steps, without
+      /// rounding anything: for example, whether a quantity is a whole number of lots.
+      ///
+      /// Zero is a step like any other, of which only zero is a multiple, while
+      /// [`quantize`](Self::quantize) rejects a zero step.
+      #[must_use]
+      #[inline]
+      pub const fn is_multiple_of(&self, step: Self) -> bool {
+        if int::$repr::is_zero(step.repr) {
+          return int::$repr::is_zero(self.repr);
+        }
+        int::$repr::is_zero(int::$repr::div_rem(self.repr, step.repr).1)
+      }
     }
   };
 
-  // The imports of an example, in `rustfmt` order.
-  (@use $sign:ident native $repr:ident) => {
-    "use numo::{Decimal, ParseErrorKind, typenum::U1};"
+  // The imports of an example, the listed items of the crate and the storage, in `rustfmt` order.
+  (@use $items:literal, $sign:ident native $repr:ident) => {
+    concat!("use numo::{", $items, ", typenum::U1};")
   };
-  (@use signed wide $repr:ident) => {
-    concat!(
-      "use numo::{Decimal, ParseErrorKind, ",
-      stringify!($repr),
-      ", typenum::U1};"
-    )
+  (@use $items:literal, signed wide $repr:ident) => {
+    concat!("use numo::{", $items, ", ", stringify!($repr), ", typenum::U1};")
   };
-  (@use unsigned wide $repr:ident) => {
-    concat!(
-      "use numo::{Decimal, ParseErrorKind, typenum::U1, ",
-      stringify!($repr),
-      "};"
-    )
+  (@use $items:literal, unsigned wide $repr:ident) => {
+    concat!("use numo::{", $items, ", typenum::U1, ", stringify!($repr), "};")
   };
 
   // A native coefficient compares with an integer literal, a wide one through its text.
