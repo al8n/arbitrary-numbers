@@ -84,7 +84,8 @@
 //!
 //! # `no_std`
 //!
-//! The crate is `no_std` and never allocates.
+//! The crate is `no_std` and never allocates, except for the boxed iterator that the `quickcheck`
+//! feature returns from shrinking, as the `quickcheck` trait requires.
 //!
 //! # `serde`
 //!
@@ -101,11 +102,102 @@
 //! change `16.7` to the nearest `f64`. Nor is the coefficient written alone: it depends on the
 //! number of fraction digits, and read back into a type with another number it would be off by a
 //! power of ten. A rounding mode is written as the name of its variant, such as `"HalfEven"`.
+//!
+//! # `arbitrary`, `proptest` and `quickcheck`
+//!
+//! The `arbitrary`, `proptest` and `quickcheck` features implement the `Arbitrary` trait of each
+//! crate for [`Decimal`] and [`RoundingMode`], for fuzzing and property tests. All three draw a
+//! decimal the same way. With probability 1/8 it is an edge value: zero, one unit in the last
+//! place, one when `Integral` is nonzero, `MAX`, or a coefficient of `10^k`, `10^k - 1`, `5 * 10^k`
+//! or `15 * 10^k` for a uniform `k`, the last two being rounding ties. Otherwise the number of
+//! digits of its coefficient is uniform between one and `Integral + Fraction`, and the coefficient
+//! is uniform among the numbers with that many digits, so small amounts, values with few fraction
+//! digits and values of full width are all common. With probability 1/4, a uniform number of its
+//! trailing digits, fewer than all of them, is then zero, which makes values on a coarser step,
+//! such as `64250.50`, frequent. A signed storage gives a nonzero value either sign with equal
+//! probability.
+//!
+//! The `arbitrary` feature reads one byte for each choice through `Unstructured::int_in_range`,
+//! which makes the choices only nearly uniform. As for `arbitrary` itself, which bytes give which
+//! value is not stable and may change in any release.
+//!
+//! ```
+//! # #[cfg(feature = "arbitrary")]
+//! # {
+//! use arbitrary::{Arbitrary, Unstructured};
+//! use numo::{
+//!   Decimal,
+//!   typenum::{U8, U10},
+//! };
+//!
+//! type Price = Decimal<U10, U8>;
+//!
+//! // Bytes from a fuzzer.
+//! let bytes = [3, 17, 4, 2, 9, 9, 1, 3, 5, 8, 0, 6];
+//! let price = Price::arbitrary(&mut Unstructured::new(&bytes)).unwrap();
+//! assert_eq!(price.to_string().parse(), Ok(price));
+//! # }
+//! ```
+//!
+//! The `proptest` and `quickcheck` features shrink a failing decimal by decimal truncation: they
+//! try zero, then the magnitude of a negative value, then the value truncated toward zero to its
+//! first digit, its first two digits, and so on, and continue from the first candidate that fails.
+//! They stop at a failing value none of whose candidates fail, which is not necessarily the
+//! smallest failing value. A rounding mode shrinks toward [`RoundingMode::Down`], which truncates.
+//! The `proptest` feature enables the `std` feature of `proptest` and adds the module
+//! `numo::proptest`, with the strategy and value tree of a decimal.
+//!
+//! ```
+//! # #[cfg(feature = "proptest")]
+//! # {
+//! use numo::{
+//!   Decimal, RoundingMode,
+//!   typenum::{U8, U10},
+//! };
+//! use proptest::prelude::*;
+//!
+//! type Price = Decimal<U10, U8>;
+//!
+//! proptest!(|(price in any::<Price>(), mode in any::<RoundingMode>())| {
+//!   let tick: Price = "0.01".parse().unwrap();
+//!   if let Ok(rounded) = price.quantize(tick, mode) {
+//!     prop_assert!(rounded.is_multiple_of(tick));
+//!   }
+//! });
+//! # }
+//! ```
+//!
+//! The `quickcheck` feature boxes the iterator that shrinking returns, as the `quickcheck` trait
+//! requires.
+//!
+//! ```
+//! # #[cfg(feature = "quickcheck")]
+//! # {
+//! use numo::{
+//!   Decimal,
+//!   typenum::{U8, U10},
+//! };
+//! use quickcheck::QuickCheck;
+//!
+//! type Price = Decimal<U10, U8>;
+//!
+//! fn cancels(price: Price) -> bool {
+//!   price.checked_add(-price) == Some(Price::ZERO)
+//! }
+//!
+//! QuickCheck::new().quickcheck(cancels as fn(Price) -> bool);
+//! # }
+//! ```
+//!
+//! The three frameworks use `std`, so these features need a target that has it; the code of this
+//! crate stays `no_std`.
 #![no_std]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 #![cfg_attr(docsrs, allow(unused_attributes))]
 #![deny(missing_docs)]
 
+#[cfg(feature = "quickcheck")]
+extern crate alloc;
 #[cfg(test)]
 extern crate std;
 
@@ -123,10 +215,19 @@ pub use layout::{
 };
 pub use rounding::RoundingMode;
 
+#[cfg(feature = "arbitrary")]
+mod arbitrary;
 mod decimal;
 mod int;
 mod integer;
 mod layout;
+#[cfg(feature = "proptest")]
+#[cfg_attr(docsrs, doc(cfg(feature = "proptest")))]
+pub mod proptest;
+#[cfg(feature = "quickcheck")]
+mod quickcheck;
 mod rounding;
+#[cfg(any(feature = "arbitrary", feature = "proptest", feature = "quickcheck"))]
+mod sample;
 #[cfg(feature = "serde")]
 mod serde;

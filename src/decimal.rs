@@ -219,11 +219,23 @@ pub struct Decimal<Integral, Fraction, Repr = <Sum<Integral, Fraction> as DigitC
 impl<I, F, R> Decimal<I, F, R> {
   /// Wraps a coefficient without checking it. Callers ensure that the layout of the type holds
   /// and that `|repr| <= 10^(Integral + Fraction) - 1`.
-  const fn from_coeff(repr: R) -> Self {
+  pub(crate) const fn from_coeff(repr: R) -> Self {
     Self {
       repr,
       _digits: PhantomData,
     }
+  }
+}
+
+#[cfg(feature = "quickcheck")]
+impl<I, F, R> Decimal<I, F, R>
+where
+  R: Copy,
+{
+  /// Returns the coefficient. Storage-generic code calls this, because `repr` is defined for each
+  /// storage.
+  pub(crate) const fn coeff(self) -> R {
+    self.repr
   }
 }
 
