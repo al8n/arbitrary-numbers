@@ -8,6 +8,7 @@ use ::proptest::{prelude::*, test_runner::RngSeed};
 use num_bigint::{BigInt, Sign};
 use typenum::{
   U1, U2, U7, U63, U64, U65, U100, U127, U128, U129, U160, U200, U255, U256, U257, U511, U1023,
+  U4294967295,
 };
 
 use crate::{
@@ -348,6 +349,14 @@ fn the_widest_aliases_format_every_digit() {
     format!("{:+}", i4096::MAX),
     format!("+{}", bigint::max(4096, true))
   );
+}
+
+#[test]
+fn the_largest_width_is_u32_max() {
+  // `2^32 - 1` bits in `2^26` limbs. Only constants of the type are used, so no value of half a
+  // gibibyte is made.
+  assert_eq!(Uint::<U4294967295, [u64; 67108864]>::BITS, u32::MAX);
+  assert_eq!(Int::<U4294967295, [u64; 67108864]>::BITS, u32::MAX);
 }
 
 /// The proptest configuration: the default, or under Miri a few cases from a fixed seed, written

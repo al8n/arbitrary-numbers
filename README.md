@@ -150,7 +150,8 @@ The aliases name the widths that fill their limbs: the wide storages above, and 
   for `Int`.
 - Numeric equality, ordering and hashing, where the hash depends only on the value and `Bits`,
   decimal formatting, and `Default`, which is zero.
-- A width that its storage cannot hold, or zero bits, is rejected during type checking.
+- A width that its storage cannot hold, zero bits, or `2^32` bits or more is rejected during type
+  checking.
 
 Their arithmetic and other limb types are planned.
 

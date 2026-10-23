@@ -10,7 +10,7 @@ use core::{
 use crate::{
   int,
   layout::Token,
-  width::{self, FillsRepr, FitsBits, IntRepr, UintRepr},
+  width::{FillsRepr, FitsBits, IntRepr, UintRepr},
 };
 
 /// An unsigned integer of `Bits` bits, stored in `Repr`.
@@ -142,8 +142,8 @@ impl<B, const N: usize> Uint<B, [u64; N]>
 where
   B: FitsBits<[u64; N]>,
 {
-  /// The number of bits, `Bits`, which must be below `2^32`.
-  pub const BITS: u32 = width::bit_count::<B>();
+  /// The number of bits, `Bits`.
+  pub const BITS: u32 = B::U32;
 
   /// Zero.
   pub const ZERO: Self = Self::wrap([0; N]);
@@ -236,8 +236,8 @@ impl<B, const N: usize> Int<B, [u64; N]>
 where
   B: FitsBits<[u64; N]>,
 {
-  /// The number of bits, `Bits`, including the sign bit, which must be below `2^32`.
-  pub const BITS: u32 = width::bit_count::<B>();
+  /// The number of bits, `Bits`, including the sign bit.
+  pub const BITS: u32 = B::U32;
 
   /// Zero.
   pub const ZERO: Self = Self::wrap([0; N]);
@@ -388,9 +388,7 @@ macro_rules! integer_traits {
       /// `Bits`, whatever the number of limbs.
       #[inline]
       fn hash<H: Hasher>(&self, state: &mut H) {
-        self
-          .repr
-          .hash_limbs(const { width::bit_count::<B>() }, state, Token::new());
+        self.repr.hash_limbs(B::U32, state, Token::new());
       }
     }
 

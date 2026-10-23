@@ -135,7 +135,7 @@ fn main() -> Result<(), ParseError> {
   `checked_from_limbs`，limb 中的值超出 `Bits` 位的范围时返回 `None`；`to_limbs`、`as_limbs` 与 `is_zero`，
   `Int` 还有 `is_negative` 与 `is_positive`。
 - 按数值的相等、比较与哈希，哈希只取决于值与 `Bits`；十进制格式化；`Default` 为零。
-- 存储放不下的位宽和零位宽，在类型检查阶段就会报错。
+- 存储放不下的位宽、零位宽，以及 `2^32` 位及以上的位宽，在类型检查阶段就会报错。
 
 它们的运算与其他 limb 类型计划中。
 

@@ -3,9 +3,15 @@
 
 use core::{cmp::Ordering, fmt, hash::Hasher, ops::Shl};
 
-use typenum::{Const, IsEqual, IsLessOrEqual, LeEq, NonZero, Shleft, ToUInt, U, U6, Unsigned};
+use typenum::{
+  Const, IsEqual, IsLess, IsLessOrEqual, Le, LeEq, NonZero, Shleft, ToUInt, U, U6, U4294967296,
+  Unsigned,
+};
 
-use sealed::{BitsFit, ReprFilled, SealedFillsRepr, SealedFitsBits, SealedIntRepr, SealedUintRepr};
+use sealed::{
+  BitsBelow2Pow32, BitsFit, ReprFilled, SealedFillsRepr, SealedFitsBits, SealedIntRepr,
+  SealedUintRepr,
+};
 
 use crate::{
   int::{limbs, signed_limbs},
@@ -33,6 +39,17 @@ mod sealed {
   pub trait BitsFit {}
 
   impl BitsFit for typenum::B1 {}
+
+  /// Implemented only for `B1`, the result of `Bits < 2^32`, below which `typenum`'s `U32` is
+  /// exact.
+  #[diagnostic::on_unimplemented(
+    message = "`Bits` must be below 2^32",
+    label = "`Bits` is 2^32 or more",
+    note = "the number of bits is a `u32`, as the constant `BITS` is"
+  )]
+  pub trait BitsBelow2Pow32 {}
+
+  impl BitsBelow2Pow32 for typenum::B1 {}
 
   /// Implemented only for `B1`, the result of `Bits == 64 * N` when `Bits` fills `[u64; N]`.
   #[diagnostic::on_unimplemented(
@@ -89,12 +106,12 @@ mod sealed {
 
 /// Marks that `Repr` holds every value of `Self` bits.
 ///
-/// `Self` is a [`typenum`] number of at least 1. The array `[u64; N]` holds up to `64 * N` bits,
-/// for every `N` for which `typenum` implements `ToUInt` for `Const<N>`: each `N` up to 1024, and
-/// larger ones such as the powers of 2 and of 10. A storage may have more bits than needed, as
-/// `[u64; 4]` has for 200 bits. [`Uint`](crate::Uint) and [`Int`](crate::Int) require this bound
-/// on their constants, constructors and `Default`, not on the types themselves, so generic code
-/// adds it where it uses them:
+/// `Self` is a [`typenum`] number from 1 to `2^32 - 1`, so that the constant `BITS`, a `u32`, holds
+/// it. The array `[u64; N]` holds up to `64 * N` bits, for every `N` for which `typenum` implements
+/// `ToUInt` for `Const<N>`: each `N` up to 1024, and larger ones such as the powers of 2 and of 10.
+/// A storage may have more bits than needed, as `[u64; 4]` has for 200 bits. [`Uint`](crate::Uint)
+/// and [`Int`](crate::Int) require this bound on their constants, constructors and `Default`, not
+/// on the types themselves, so generic code adds it where it uses them:
 ///
 /// ```
 /// use numo::{FitsBits, Uint};
@@ -136,12 +153,15 @@ impl<B, R> FillsRepr<R> for B where B: FitsBits<R> + SealedFillsRepr<R> {}
 /// `64 * N`, the number of bits of `[u64; N]`.
 type LimbBits<const N: usize> = Shleft<U<N>, U6>;
 
+// The bound below 2^32 is a comparison of types, because `typenum`'s `U32` and `U64` wrap: for
+// `64 * 2^58` bits, both are zero.
 impl<B, const N: usize> SealedFitsBits<[u64; N]> for B
 where
-  B: IsLessOrEqual<LimbBits<N>>,
+  B: IsLessOrEqual<LimbBits<N>> + IsLess<U4294967296>,
   Const<N>: ToUInt,
   U<N>: Shl<U6>,
   LeEq<B, LimbBits<N>>: BitsFit,
+  Le<B, U4294967296>: BitsBelow2Pow32,
 {
 }
 
@@ -221,16 +241,6 @@ impl<const N: usize> SealedIntRepr for [u64; N] {
       f,
     )
   }
-}
-
-/// `Bits` as a `u32`.
-///
-/// `typenum` computes `U32` modulo `2^32` and `U64` modulo `2^64`. A width from `2^32` to
-/// `2^64 - 1` bits, which takes an array of half a gibibyte or more, fails to compile here instead
-/// of wrapping.
-pub(crate) const fn bit_count<B: Unsigned>() -> u32 {
-  assert!(B::U64 == B::U32 as u64, "`Bits` must be below 2^32");
-  B::U32
 }
 
 /// Writes the lowest `ceil(bits / 64)` limbs of `value` to `state`, least significant first,
