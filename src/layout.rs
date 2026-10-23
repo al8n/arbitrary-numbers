@@ -315,13 +315,13 @@ pub trait Pick<Digits>: SealedPick<Digits> {
   type Storage: Storage;
 }
 
-impl<D> SealedPick<D> for B0 {}
+impl<D: DigitCount> SealedPick<D> for B0 {}
 
 impl<D: DigitCount> Pick<D> for B0 {
   type Storage = D::Signed;
 }
 
-impl<D> SealedPick<D> for B1 {}
+impl<D: DigitCount> SealedPick<D> for B1 {}
 
 impl<D: DigitCount> Pick<D> for B1 {
   type Storage = D::Unsigned;
