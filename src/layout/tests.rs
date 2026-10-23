@@ -10,7 +10,10 @@ use typenum::{
   U97, U98, U115, U116, U117, U134, U135, U153, U154, Unsigned,
 };
 
-use super::{DigitCount, FitsDigits, Layout, Pick, SealedLayout, SealedStorage, Token, WidenRepr};
+use super::{
+  DigitCount, DivIntermediate, FitsDigits, Layout, Pick, SealedLayout, SealedStorage, Token,
+  WidenRepr,
+};
 use crate::{bigint, i192, i256, i320, i384, i448, i512, u192, u256, u320, u384, u448, u512};
 
 /// Every signed storage with its number of value bits, smallest storage first.
@@ -113,6 +116,15 @@ macro_rules! test_digits {
         TypeId::of::<<Digits as DigitCount>::Unsigned>(),
         TypeId::of::<$unsigned>()
       );
+      // `div_round` divides in the same storages.
+      assert_eq!(
+        TypeId::of::<<Digits as DivIntermediate<B0>>::Storage>(),
+        TypeId::of::<$signed>()
+      );
+      assert_eq!(
+        TypeId::of::<<Digits as DivIntermediate<B1>>::Storage>(),
+        TypeId::of::<$unsigned>()
+      );
 
       // `FitsDigits` is implemented for every listed storage.
       assert_fits::<Digits, $signed>();
@@ -142,6 +154,11 @@ fn U154() {
     "no signed storage holds the digits"
   );
   assert_fits::<U154, u512>();
+  // Only a division of two unsigned storages has an intermediate of 154 digits.
+  assert_eq!(
+    TypeId::of::<<U154 as DivIntermediate<B1>>::Storage>(),
+    TypeId::of::<u512>()
+  );
 }
 
 fn digits<I, F, R>() -> (u32, u32, u32)

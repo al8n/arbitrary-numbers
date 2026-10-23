@@ -5,8 +5,8 @@ use core::{hash::Hash, ops::Add};
 use typenum::{B0, B1, IsLessOrEqual, LeEq, Sum, Unsigned};
 
 use sealed::{
-  ConvertFrom, FractionNotReduced, IntegralNotReduced, SealedDigitCount, SealedFitsDigits,
-  SealedPick, SealedWiden, SealedWidenRepr,
+  ConvertFrom, FractionNotReduced, IntegralNotReduced, SealedDigitCount, SealedDivIntermediate,
+  SealedFitsDigits, SealedPick, SealedWiden, SealedWidenRepr,
 };
 pub(crate) use sealed::{SealedLayout, SealedStorage, Token};
 
@@ -99,6 +99,10 @@ mod sealed {
     /// `self / 10^exp` rounded to an integer with `mode`. Requires `10^exp` to be representable.
     fn round_div_pow10(self, exp: u32, mode: RoundingMode, token: Token) -> Self;
 
+    /// `self / divisor` rounded to an integer with `mode`. Requires `divisor != 0`, and for a
+    /// signed storage that neither operand is `MIN`.
+    fn round_div(self, divisor: Self, mode: RoundingMode, token: Token) -> Self;
+
     /// Writes the decimal digits of the magnitude to the end of `buf` and returns the index of
     /// the first digit.
     fn write_digits(self, buf: &mut DigitBuf, token: Token) -> usize;
@@ -140,6 +144,9 @@ mod sealed {
 
   /// Seals [`Pick`](super::Pick).
   pub trait SealedPick<Digits> {}
+
+  /// Seals [`DivIntermediate`](super::DivIntermediate).
+  pub trait SealedDivIntermediate<IsUnsigned> {}
 
   /// Seals [`Widen`](super::Widen).
   pub trait SealedWiden<Target> {}
@@ -320,6 +327,26 @@ impl<D: DigitCount> Pick<D> for B1 {
   type Storage = D::Unsigned;
 }
 
+/// Picks the storage in which [`Decimal::div_round`](crate::Decimal::div_round) divides, for a
+/// type-level number of decimal digits.
+///
+/// `Self` is the number of digits that the scaled dividend and the scaled divisor need, and
+/// `IsUnsigned` is `B1` when both operands have unsigned storages and `B0` otherwise. As with
+/// [`Pick`], `B0` picks [`DigitCount::Signed`] and `B1` picks [`DigitCount::Unsigned`] for `U1`
+/// through `U153`. `U154` has a storage only with `B1`, a [`u512`](crate::u512), so a division
+/// whose intermediate has more than 153 digits fails to compile, unless it has 154 and both
+/// storages are unsigned. This trait is sealed and cannot be implemented outside this crate.
+#[diagnostic::on_unimplemented(
+  message = "the intermediate of `div_round` has more than 153 digits",
+  label = "`Integral + max(Fraction, F2 + F3)` or `I2 + max(F2 + F3, Fraction) - F3` is greater than 153",
+  note = "narrow an operand with `try_convert`, or ask for fewer fraction digits",
+  note = "a `u512` intermediate holds up to 154 digits, when both storages are unsigned"
+)]
+pub trait DivIntermediate<IsUnsigned>: SealedDivIntermediate<IsUnsigned> {
+  /// The smallest storage of the picked sign that holds every value with `Self` decimal digits.
+  type Storage: Storage;
+}
+
 /// Requires that a decimal with the digit counts `Self = (Integral, Fraction)` converts to one with
 /// the digit counts `Target = (I2, F2)` without losing digits: `Integral <= I2` and
 /// `Fraction <= F2`.
@@ -379,6 +406,18 @@ macro_rules! impl_storage {
           int::$int::le(int::$int::neg(max), self) && int::$int::le(self, max)
         }
 
+        #[inline]
+        fn round_div(self, divisor: Self, mode: RoundingMode, _: Token) -> Self {
+          // The rounding step requires a positive divisor: it reads the divisor as its magnitude
+          // and the sign of the exact quotient from the dividend, because a quotient of zero has
+          // none. Negating both operands keeps the quotient and moves its sign to the dividend.
+          if int::$int::is_negative(divisor) {
+            int::$int::round_div(int::$int::neg(self), int::$int::neg(divisor), mode).0
+          } else {
+            int::$int::round_div(self, divisor, mode).0
+          }
+        }
+
         impl_storage!(@shared $int);
       }
 
@@ -396,6 +435,11 @@ macro_rules! impl_storage {
         #[inline]
         fn within_digits(self, digits: u32, _: Token) -> bool {
           int::$uint::le(self, int::$uint::max_magnitude(digits))
+        }
+
+        #[inline]
+        fn round_div(self, divisor: Self, mode: RoundingMode, _: Token) -> Self {
+          int::$uint::round_div(self, divisor, mode).0
         }
 
         impl_storage!(@shared $uint);
@@ -584,8 +628,8 @@ impl_widen_repr!(
 ///
 /// Each row is `Digits = value => [Signed, Wider...], [Unsigned, Wider...]`: the `typenum`
 /// constant for a number of digits, its value, and, for each sign, every storage that holds that
-/// many digits, smallest first. The first storage of each list is the `DigitCount` mapping; every
-/// listed storage gets `FitsDigits`.
+/// many digits, smallest first. The first storage of each list is the `DigitCount` and
+/// `DivIntermediate` mapping; every listed storage gets `FitsDigits`.
 macro_rules! digit_table {
   ($callback:ident) => {
     $callback! {
@@ -835,6 +879,18 @@ macro_rules! impl_digits {
       type Unsigned = $unsigned;
     }
 
+    impl SealedDivIntermediate<B0> for typenum::consts::$digits {}
+
+    impl DivIntermediate<B0> for typenum::consts::$digits {
+      type Storage = $signed;
+    }
+
+    impl SealedDivIntermediate<B1> for typenum::consts::$digits {}
+
+    impl DivIntermediate<B1> for typenum::consts::$digits {
+      type Storage = $unsigned;
+    }
+
     impl_digits!(@fits $digits: $signed $(, $wider_signed)*, $unsigned $(, $wider_unsigned)*);
   )+};
   (@fits $digits:ident: $($repr:ident),+) => {$(
@@ -846,10 +902,17 @@ macro_rules! impl_digits {
 
 digit_table!(impl_digits);
 
-// Only a `u512` holds 154 digits and no signed storage does, so there is no `DigitCount`.
+// Only a `u512` holds 154 digits and no signed storage does, so there is no `DigitCount`, and only
+// a division of two unsigned storages has an intermediate of 154 digits.
 impl SealedFitsDigits<u512> for typenum::consts::U154 {}
 
 impl FitsDigits<u512> for typenum::consts::U154 {}
+
+impl SealedDivIntermediate<B1> for typenum::consts::U154 {}
+
+impl DivIntermediate<B1> for typenum::consts::U154 {
+  type Storage = u512;
+}
 
 #[cfg(test)]
 mod tests;

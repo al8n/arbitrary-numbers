@@ -30,8 +30,9 @@
 //!
 //! Every operation is exact: it returns the exact result or reports failure, and nothing rounds,
 //! truncates or wraps unless asked to. Rounding takes an explicit [`RoundingMode`]:
-//! [`round_to`](Decimal::round_to) converts to fewer fraction digits and
-//! [`quantize`](Decimal::quantize) rounds to a multiple of a step, while
+//! [`round_to`](Decimal::round_to) converts to fewer fraction digits,
+//! [`quantize`](Decimal::quantize) rounds to a multiple of a step and
+//! [`div_round`](Decimal::div_round) divides into any decimal type, while
 //! [`is_multiple_of`](Decimal::is_multiple_of) checks a value against a step without rounding it.
 //! Parsing accepts decimal and exponent notation with `_` separators, including every form that
 //! `f64` parses, and rejects infinity, NaN and digits that do not fit; formatting writes the
@@ -113,11 +114,13 @@ mod bigint;
 
 pub use typenum;
 
-pub use decimal::{ConvertError, Decimal, ParseError, ParseErrorKind, QuantizeError};
+pub use decimal::{ConvertError, Decimal, DivideError, ParseError, ParseErrorKind, QuantizeError};
 pub use integer::{
   Int, Uint, i192, i256, i320, i384, i448, i512, u192, u256, u320, u384, u448, u512,
 };
-pub use layout::{DigitCount, FitsDigits, Layout, Pick, Storage, Widen, WidenRepr};
+pub use layout::{
+  DigitCount, DivIntermediate, FitsDigits, Layout, Pick, Storage, Widen, WidenRepr,
+};
 pub use rounding::RoundingMode;
 
 mod decimal;

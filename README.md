@@ -88,8 +88,8 @@ fn main() -> Result<(), ParseError> {
   range, `exact_mul` returns a wider type that always holds the product, up to 153 digits, `widen`
   converts to a type with at least as many digits, and `try_convert` reports `OutOfRange` or
   `Inexact` instead of rounding. Rounding happens only where an explicit `RoundingMode` is given:
-  `round_to` converts to fewer fraction digits, and `quantize` rounds to a multiple of a step.
-  There are no `+`, `-`, `*` or `/` operators.
+  `round_to` converts to fewer fraction digits, `quantize` rounds to a multiple of a step, and
+  `div_round` divides into any decimal type. There are no `+`, `-`, `*` or `/` operators.
 - Conversions follow the sign of the storage. The product of two unsigned storages is unsigned,
   and any other product is signed. `widen` converts an unsigned storage to any storage, but a
   signed storage only to a signed one. `try_convert` reports a negative value converted to an
