@@ -101,8 +101,8 @@ fn main() -> Result<(), ParseError> {
   form that `f64` parses, such as `-1.5`, `+.5`, `5.`, `2.5E-3` and `1_000`. Infinity and NaN are
   recognized and reported as `NotFinite`, because a `Decimal` is always finite. A value that does
   not fit is `OutOfRange` or `Inexact`, never rounded.
-- `Display` writes the shortest exact text, without an exponent. Format precision pads with zeros
-  but never rounds.
+- `Display` writes the shortest exact text, without an exponent, and `{:e}` and `{:E}` write it in
+  scientific notation, such as `6.42505e4`. Format precision pads with zeros but never rounds.
 
 ## Wide storage
 

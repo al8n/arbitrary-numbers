@@ -181,14 +181,23 @@ mod tests;
 /// same text. Text written for one type parses back into any type with at least as many integral
 /// and fraction digits, except that a negative value needs a signed `Repr`.
 ///
-/// The width, fill, alignment, `+` and `0` flags behave as they do for integers. The precision is
-/// the minimum number of fraction digits: shorter fractions are padded with zeros, even beyond
-/// `Fraction`.
+/// [`LowerExp`](fmt::LowerExp) and [`UpperExp`](fmt::UpperExp), the `{:e}` and `{:E}` formats,
+/// write scientific notation instead: an optional `-`, the significant digits with the point after
+/// the first, omitted when only one digit remains, then `e` or `E` and the exponent of the first
+/// digit, with `-` when negative and without `+` or leading zeros. `64250.5` is `6.42505e4`,
+/// `0.00012` is `1.2e-4`, `-3` is `-3e0` and zero is `0e0`. The text depends only on the value, and
+/// parses back into any type with at least as many integral and fraction digits, except that a
+/// negative value needs a signed `Repr`.
+///
+/// The width, fill, alignment, `+` and `0` flags behave as they do for integers, and the width
+/// counts the whole text, exponent included. The precision is the minimum number of fraction
+/// digits, those of the mantissa for `{:e}` and `{:E}`: shorter fractions are padded with zeros,
+/// even beyond `Fraction`.
 ///
 /// <div class="warning">
 ///
 /// Precision never rounds or truncates. Unlike floating-point formatting, `{:.1}` writes `1.25`
-/// as `1.25`, not `1.2` or `1.3`.
+/// as `1.25`, not `1.2` or `1.3`, and `{:.1e}` writes it as `1.25e0`, not `1.2e0` or `1.3e0`.
 ///
 /// </div>
 ///
@@ -208,6 +217,29 @@ mod tests;
 /// assert_eq!(format!("{amount:>8}"), "   -1.25");
 /// assert_eq!(format!("{amount:08.3}"), "-001.250");
 /// assert_eq!(format!("{:+}", amount.abs()), "+1.25");
+/// # Ok::<(), numo::ParseError>(())
+/// ```
+///
+/// Scientific notation takes the same flags and precision:
+///
+/// ```
+/// use numo::{
+///   Decimal,
+///   typenum::{U8, U10},
+/// };
+///
+/// type Price = Decimal<U10, U8>;
+///
+/// let price: Price = "64250.5".parse()?;
+/// assert_eq!(format!("{price:e}"), "6.42505e4");
+/// assert_eq!(format!("{price:E}"), "6.42505E4");
+/// assert_eq!(format!("{:e}", "0.00012".parse::<Price>()?), "1.2e-4");
+/// assert_eq!(format!("{:e}", Price::ZERO), "0e0");
+/// assert_eq!(format!("{price:.8e}"), "6.42505000e4");
+/// assert_eq!(format!("{price:.2e}"), "6.42505e4");
+/// assert_eq!(format!("{:012e}", -price), "-006.42505e4");
+/// assert_eq!(format!("{price:>12E}"), "   6.42505E4");
+/// assert_eq!(format!("{price:e}").parse::<Price>()?, price);
 /// # Ok::<(), numo::ParseError>(())
 /// ```
 #[repr(transparent)]
@@ -752,5 +784,49 @@ where
   #[inline]
   fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
     fmt::Display::fmt(self, f)
+  }
+}
+
+impl<I, F, R> fmt::LowerExp for Decimal<I, F, R>
+where
+  R: Storage,
+  (I, F): Layout<R>,
+{
+  /// Writes scientific notation with `e`, honoring width, fill, alignment, `+`, `0` and precision
+  /// as described on [`Decimal`]. Precision never rounds or truncates: unlike the primitive types,
+  /// `{:.1e}` writes `1.25` as `1.25e0`, not `1.2e0`. Use [`round_to`](Self::round_to) or
+  /// [`quantize`](Self::quantize) to round.
+  fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    let mut buf = [0; int::DIGIT_BUF_LEN];
+    let start = self.repr.write_digits(&mut buf, Token::new());
+    format::write_exp(
+      f,
+      self.repr.is_negative(Token::new()),
+      &buf[start..],
+      Self::FRACTION as usize,
+      b'e',
+    )
+  }
+}
+
+impl<I, F, R> fmt::UpperExp for Decimal<I, F, R>
+where
+  R: Storage,
+  (I, F): Layout<R>,
+{
+  /// Writes scientific notation with `E`, honoring width, fill, alignment, `+`, `0` and precision
+  /// as described on [`Decimal`]. Precision never rounds or truncates: unlike the primitive types,
+  /// `{:.1E}` writes `1.25` as `1.25E0`, not `1.2E0`. Use [`round_to`](Self::round_to) or
+  /// [`quantize`](Self::quantize) to round.
+  fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    let mut buf = [0; int::DIGIT_BUF_LEN];
+    let start = self.repr.write_digits(&mut buf, Token::new());
+    format::write_exp(
+      f,
+      self.repr.is_negative(Token::new()),
+      &buf[start..],
+      Self::FRACTION as usize,
+      b'E',
+    )
   }
 }

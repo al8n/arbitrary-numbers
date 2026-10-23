@@ -15,6 +15,10 @@ FEATURES
     form that `f64` parses (signs, `.5`, `5.`, exponents) and `_` separators as in Rust literals,
     and reports infinity and NaN as the new `ParseErrorKind::NotFinite`. Exponents of any size are
     applied exactly.
+  - Scientific notation through `LowerExp` and `UpperExp`, `{:e}` and `{:E}`: the significant
+    digits with the point after the first, and the exponent, as in `6.42505e4`, with zero as `0e0`.
+    The flags work as for `Display`, and the precision is the minimum number of mantissa fraction
+    digits, so it never rounds, unlike the precision of the primitive types.
   - Unsigned storages from `u8` to `u128`, named explicitly (`u64` holds 19 digits, one more than
     `i64`): values are never negative, parsing rejects a leading `-`, and `checked_sub` returns
     `None` below zero. The product of two unsigned storages is unsigned, `widen` never converts a
