@@ -31,8 +31,13 @@ pub(crate) const DIGIT_BUF_LEN: usize = 155;
 // The modules below shadow the primitive type names in this module.
 pub(crate) type DigitBuf = [core::primitive::u8; DIGIT_BUF_LEN];
 
+mod limb_layer;
 pub(crate) mod limbs;
+#[cfg(test)]
+mod limbs32;
 pub(crate) mod signed_limbs;
+#[cfg(test)]
+mod signed_limbs32;
 
 macro_rules! native {
   (unsigned $uint:ident) => {
