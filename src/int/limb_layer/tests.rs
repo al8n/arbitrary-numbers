@@ -577,6 +577,13 @@ macro_rules! limb_layer_tests {
           .as_bytes()
       );
     }
+
+    /// A zero divisor fails as native division does, in the single-limb division that it takes.
+    #[test]
+    #[should_panic(expected = "attempt to divide by zero")]
+    fn division_by_zero_panics() {
+      let _ = div_rem(&[1, 2, 3], &[0; 3]);
+    }
   };
   (signed unsigned: $unsigned:ident) => {
     use core::cmp::Ordering;
@@ -968,6 +975,29 @@ macro_rules! limb_layer_tests {
         &buf[..],
         (-bigint::from_limbs(&min, true)).to_string().as_bytes()
       );
+    }
+
+    fn powers_of_ten<const N: usize>() {
+      let max_exp = bigint::max_exp(&bigint::from_limbs(&max::<N>(), true));
+      // Under Miri, the exponents around one and two scaling steps of the lower layer.
+      for exp in bigint::exponents_by(max_exp, Limb::MAX.ilog10()) {
+        assert_eq!(
+          bigint::from_limbs(&pow10::<N>(exp), true),
+          bigint::pow10(exp)
+        );
+        assert_eq!(
+          bigint::from_limbs(&max_magnitude::<N>(exp), true),
+          bigint::pow10(exp) - 1u8
+        );
+      }
+    }
+
+    #[test]
+    fn pow10_and_max_magnitude() {
+      powers_of_ten::<1>();
+      powers_of_ten::<2>();
+      powers_of_ten::<3>();
+      powers_of_ten::<8>();
     }
   };
 }
