@@ -1,0 +1,36 @@
+error[E0599]: the associated function or constant `BITS` exists for struct `Uint<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UTerm, B1>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, [u8; 536870912]>`, but its trait bounds were not satisfied
+ --> tests/ui/narrow_width_2_pow_32.rs:5:53
+  |
+5 |   let _bits = Uint::<U4294967296, [u8; 536870912]>::BITS;
+  |                                                     ^^^^ associated function or constant cannot be called due to unsatisfied trait bounds
+  |
+ ::: $CARGO/typenum-$VERSION/src/uint.rs
+  |
+  | pub struct UInt<U, B> {
+  | --------------------- doesn't satisfy `_: FitsBits<[u8; 536870912]>`
+  |
+ ::: $CARGO/typenum-$VERSION/src/bit.rs
+  |
+  | pub struct B0;
+  | ------------- doesn't satisfy `B0: numo::width::sealed::BitsBelow2Pow32`
+  |
+  = note: the following trait bounds were not satisfied:
+          `B0: numo::width::sealed::BitsBelow2Pow32`
+          which is required by `UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UTerm, B1>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>: FitsBits<[u8; 536870912]>`
+
+error[E0277]: `Bits` must be below 2^32
+ --> tests/ui/narrow_width_2_pow_32.rs:6:47
+  |
+6 |   let _: Uint<U4294967296, [u8; 536870912]> = Default::default();
+  |                                               ^^^^^^^^^^^^^^^^^^ `Bits` is 2^32 or more
+  |
+  = help: the trait `numo::width::sealed::BitsBelow2Pow32` is not implemented for `B0`
+  = note: the number of bits is a `u32`, as the constant `BITS` is
+help: the trait `numo::width::sealed::BitsBelow2Pow32` is implemented for `B1`
+ --> src/width.rs
+  |
+  |   impl BitsBelow2Pow32 for typenum::B1 {}
+  |   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  = note: required for `UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UTerm, B1>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>` to implement `numo::width::sealed::SealedFitsBits<[u8; 536870912]>`
+  = note: required for `UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UTerm, B1>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>` to implement `FitsBits<[u8; 536870912]>`
+  = note: required for `Uint<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UTerm, B1>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, [u8; 536870912]>` to implement `Default`

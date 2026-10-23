@@ -260,8 +260,3 @@ where
   }
   patterns
 }
-
-/// Bit patterns of `N` limbs of type `u64`, as [`bit_patterns_of`] gives them.
-pub(crate) fn bit_patterns<const N: usize>(widths: &[u32]) -> Vec<[u64; N]> {
-  bit_patterns_of(widths)
-}
