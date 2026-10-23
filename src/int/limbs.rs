@@ -16,6 +16,29 @@ const TEN_POW_19: u64 = 10_000_000_000_000_000_000;
 /// The exponent of `TEN_POW_19`: one limb operation scales by at most this many decimal digits.
 const MAX_STEP: u32 = 19;
 
+/// `a * b + carry + add` as two limbs, the low one first. It is at most
+/// `(2^64 - 1)^2 + 2 * (2^64 - 1) = 2^128 - 1`, so it does not overflow.
+#[inline]
+const fn carrying_mul_add(a: u64, b: u64, carry: u64, add: u64) -> (u64, u64) {
+  let wide = a as u128 * b as u128 + carry as u128 + add as u128;
+  (wide as u64, (wide >> 64) as u64)
+}
+
+/// Quotient and remainder of `high * 2^64 + low` by `divisor`. Requires `high < divisor`, so that
+/// the quotient fits a limb. A zero divisor fails as native division does.
+#[inline]
+const fn div_rem_wide(high: u64, low: u64, divisor: u64) -> (u64, u64) {
+  debug_assert!(
+    divisor == 0 || high < divisor,
+    "the quotient overflows a limb"
+  );
+  let wide = (high as u128) << 64 | low as u128;
+  (
+    (wide / divisor as u128) as u64,
+    (wide % divisor as u128) as u64,
+  )
+}
+
 /// One.
 pub(crate) const fn one<const N: usize>() -> [u64; N] {
   let mut one = [0; N];
@@ -137,7 +160,7 @@ pub(crate) const fn checked_sub<const N: usize>(
 }
 
 /// `value * factor + addend` modulo `2^(64N)`, and the limb that carried out of the top limb.
-const fn mul_add_u64<const N: usize>(
+const fn mul_add_limb<const N: usize>(
   value: &[u64; N],
   factor: u64,
   addend: u64,
@@ -146,10 +169,7 @@ const fn mul_add_u64<const N: usize>(
   let mut carry = addend;
   let mut i = 0;
   while i < N {
-    // At most `(2^64 - 1)^2 + 2^64 - 1 < 2^128`.
-    let wide = value[i] as u128 * factor as u128 + carry as u128;
-    product[i] = wide as u64;
-    carry = (wide >> 64) as u64;
+    (product[i], carry) = carrying_mul_add(value[i], factor, carry, 0);
     i += 1;
   }
   (product, carry)
@@ -163,10 +183,7 @@ pub(crate) const fn mul<const N: usize>(lhs: &[u64; N], rhs: &[u64; N]) -> [u64;
     let mut carry: u64 = 0;
     let mut j = 0;
     while i + j < N {
-      // At most `(2^64 - 1)^2 + 2 * (2^64 - 1) = 2^128 - 1`.
-      let wide = lhs[i] as u128 * rhs[j] as u128 + product[i + j] as u128 + carry as u128;
-      product[i + j] = wide as u64;
-      carry = (wide >> 64) as u64;
+      (product[i + j], carry) = carrying_mul_add(lhs[i], rhs[j], carry, product[i + j]);
       j += 1;
     }
     // A representable product carries nothing past the top limb, and the partial products that
@@ -190,7 +207,7 @@ pub(crate) const fn checked_mul_pow10<const N: usize>(
   // Each partial product is at most the full product, so the first carry decides overflow.
   while exp > 0 {
     let step = if exp < MAX_STEP { exp } else { MAX_STEP };
-    match mul_add_u64(&value, 10u64.pow(step), 0) {
+    match mul_add_limb(&value, 10u64.pow(step), 0) {
       (product, 0) => value = product,
       _ => return None,
     }
@@ -204,7 +221,7 @@ pub(crate) const fn mul_pow10<const N: usize>(value: &[u64; N], mut exp: u32) ->
   let mut value = *value;
   while exp > 0 {
     let step = if exp < MAX_STEP { exp } else { MAX_STEP };
-    let (product, carry) = mul_add_u64(&value, 10u64.pow(step), 0);
+    let (product, carry) = mul_add_limb(&value, 10u64.pow(step), 0);
     debug_assert!(carry == 0, "multiplication by a power of ten overflowed");
     value = product;
     exp -= step;
@@ -227,16 +244,17 @@ pub(crate) const fn max_magnitude<const N: usize>(digits: u32) -> [u64; N] {
 }
 
 /// Quotient and remainder of `value / divisor`. Requires `divisor != 0`.
-pub(crate) const fn div_rem_u64<const N: usize>(value: &[u64; N], divisor: u64) -> ([u64; N], u64) {
+pub(crate) const fn div_rem_limb<const N: usize>(
+  value: &[u64; N],
+  divisor: u64,
+) -> ([u64; N], u64) {
   let mut quotient = [0; N];
   let mut remainder: u64 = 0;
   let mut i = N;
   while i > 0 {
     i -= 1;
-    // `remainder < divisor`, so each quotient limb fits in a `u64`.
-    let wide = (remainder as u128) << 64 | value[i] as u128;
-    quotient[i] = (wide / divisor as u128) as u64;
-    remainder = (wide % divisor as u128) as u64;
+    // `remainder < divisor`, as `div_rem_wide` requires.
+    (quotient[i], remainder) = div_rem_wide(remainder, value[i], divisor);
   }
   (quotient, remainder)
 }
@@ -251,7 +269,7 @@ pub(crate) const fn div_rem_pow10<const N: usize>(
   let mut rest = exp;
   while rest > 0 {
     let step = if rest < MAX_STEP { rest } else { MAX_STEP };
-    quotient = div_rem_u64(&quotient, 10u64.pow(step)).0;
+    quotient = div_rem_limb(&quotient, 10u64.pow(step)).0;
     rest -= step;
   }
   // `quotient * 10^exp <= value`, so neither the product nor the difference overflows.
@@ -322,7 +340,7 @@ const fn shr<const N: usize>(value: &[u64; N], shift: u32) -> [u64; N] {
 
 /// Quotient and remainder of `lhs / rhs`. Requires `rhs != 0`.
 ///
-/// A divisor of one significant limb goes through `div_rem_u64`, and a dividend below the divisor
+/// A divisor of one significant limb goes through `div_rem_limb`, and a dividend below the divisor
 /// has the quotient zero. Otherwise this is Algorithm D of Knuth's The Art of Computer
 /// Programming, volume 2, section 4.3.1: both operands are shifted left until the high bit of the
 /// divisor's top limb is set, each quotient limb is estimated from the top limbs of the remaining
@@ -338,7 +356,7 @@ pub(crate) const fn div_rem<const N: usize>(
   }
   if n == 1 {
     // Algorithm D needs two divisor limbs. A zero divisor fails here as native division does.
-    let (quotient, remainder) = div_rem_u64(lhs, rhs[0]);
+    let (quotient, remainder) = div_rem_limb(lhs, rhs[0]);
     let mut wide = [0; N];
     wide[0] = remainder;
     return (quotient, wide);
@@ -355,8 +373,8 @@ pub(crate) const fn div_rem<const N: usize>(
   debug_assert!(lost == 0, "normalization dropped divisor bits");
   let (limbs, top) = shl(lhs, shift);
   let mut rem = Dividend { limbs, top };
-  let high = divisor[n - 1] as u128;
-  let next = divisor[n - 2] as u128;
+  let high = divisor[n - 1];
+  let next = divisor[n - 2];
   let mut quotient = [0; N];
   // D2: one step per quotient limb, from the most significant down. Step `j` divides the window
   // `rem[j..=j + n]`, whose top `n` limbs are below the divisor; only the first window reaches
@@ -364,30 +382,38 @@ pub(crate) const fn div_rem<const N: usize>(
   let mut j = N - n + 1;
   while j > 0 {
     j -= 1;
-    // D3: estimate the quotient limb from the window's top two limbs, and correct the estimate
-    // with the next divisor limb. The estimate starts at `2^64` or `2^64 + 1` when the window's top
-    // limb equals `high`; that test comes first, so the product is formed only for an estimate
-    // below `2^64`. Once `rest` reaches `2^64`, the product test cannot succeed.
-    let numerator = (rem.get(j + n) as u128) << 64 | rem.get(j + n - 1) as u128;
-    let mut estimate = numerator / high;
-    let mut rest = numerator % high;
-    while estimate >> 64 != 0 || estimate * next > (rest << 64 | rem.get(j + n - 2) as u128) {
-      estimate -= 1;
-      rest += high;
-      if rest >> 64 != 0 {
+    // D3: estimate the quotient limb, which is below `2^64`, from the window's top two limbs, and
+    // correct the estimate with the next divisor limb. The top limb is at most `high`. If it
+    // equals `high`, the quotient of the top two limbs by `high` is at least `2^64`, so the
+    // estimate starts at `2^64 - 1`, and `rest`, the remainder that goes with it, at
+    // `rem[j + n - 1] + high`, which may carry out of the limb. Once `rest` reaches `2^64`, the
+    // product test cannot succeed.
+    let top = rem.get(j + n);
+    let (mut estimate, mut rest, mut rest_overflowed) = if top == high {
+      let (rest, overflowed) = rem.get(j + n - 1).overflowing_add(high);
+      (u64::MAX, rest, overflowed)
+    } else {
+      let (estimate, rest) = div_rem_wide(top, rem.get(j + n - 1), high);
+      (estimate, rest, false)
+    };
+    // Corrects while `estimate * next > rest * 2^64 + rem[j + n - 2]`, compared limb by limb.
+    while !rest_overflowed {
+      let (product_low, product_high) = carrying_mul_add(estimate, next, 0, 0);
+      if product_high < rest || (product_high == rest && product_low <= rem.get(j + n - 2)) {
         break;
       }
+      estimate -= 1;
+      (rest, rest_overflowed) = rest.overflowing_add(high);
     }
 
-    // D4: subtract `estimate * divisor` from the window. The estimate is now below `2^64`.
+    // D4: subtract `estimate * divisor` from the window.
     let mut carry: u64 = 0;
     let mut borrow = false;
     let mut i = 0;
     while i < n {
-      // At most `(2^64 - 1)^2 + 2^64 - 1 < 2^128`.
-      let product = estimate * divisor[i] as u128 + carry as u128;
-      carry = (product >> 64) as u64;
-      let (limb, first) = rem.get(j + i).overflowing_sub(product as u64);
+      let (product_low, product_high) = carrying_mul_add(estimate, divisor[i], carry, 0);
+      carry = product_high;
+      let (limb, first) = rem.get(j + i).overflowing_sub(product_low);
       let (limb, second) = limb.overflowing_sub(borrow as u64);
       rem.set(j + i, limb);
       borrow = first || second;
@@ -412,7 +438,7 @@ pub(crate) const fn div_rem<const N: usize>(
       }
       rem.set(j + n, rem.get(j + n).wrapping_add(carry as u64));
     }
-    quotient[j] = estimate as u64;
+    quotient[j] = estimate;
   }
   debug_assert!(rem.top == 0, "the remainder exceeds the divisor");
   // D8: unnormalize the remainder, which is below the normalized divisor.
@@ -475,7 +501,7 @@ pub(crate) const fn write_digits_into<const N: usize>(value: &[u64; N], buf: &mu
   let mut start = buf.len();
   // Divides off 19 digits at a time, least significant first.
   loop {
-    let (quotient, mut chunk) = div_rem_u64(&value, TEN_POW_19);
+    let (quotient, mut chunk) = div_rem_limb(&value, TEN_POW_19);
     value = quotient;
     if is_zero(&value) {
       // The most significant chunk, without leading zeros.
@@ -501,7 +527,7 @@ pub(crate) const fn write_digits_into<const N: usize>(value: &[u64; N], buf: &mu
 
 /// `value * scale + chunk`. Requires a representable result.
 const fn append<const N: usize>(value: &[u64; N], scale: u64, chunk: u64) -> [u64; N] {
-  let (appended, carry) = mul_add_u64(value, scale, chunk);
+  let (appended, carry) = mul_add_limb(value, scale, chunk);
   debug_assert!(carry == 0, "appending digits overflowed");
   appended
 }
