@@ -138,89 +138,6 @@ impl<B, R> Uint<B, R> {
   }
 }
 
-impl<B, const N: usize> Uint<B, [u64; N]>
-where
-  B: FitsBits<[u64; N]>,
-{
-  /// The number of bits, `Bits`.
-  pub const BITS: u32 = B::U32;
-
-  /// Zero.
-  pub const ZERO: Self = Self::wrap([0; N]);
-
-  /// The smallest value, zero.
-  pub const MIN: Self = Self::ZERO;
-
-  /// The largest value, `2^Bits - 1`.
-  pub const MAX: Self = Self::wrap(int::limbs::max_of_bits(Self::BITS));
-
-  /// Creates an integer from its 64-bit limbs, least significant first.
-  ///
-  /// `Bits` fills the limbs, so every bit pattern is a value and this never fails. For a width that
-  /// leaves bits unused, [`checked_from_limbs`](Self::checked_from_limbs) checks the limbs instead.
-  #[must_use]
-  #[inline]
-  pub const fn from_limbs(limbs: [u64; N]) -> Self
-  where
-    B: FillsRepr<[u64; N]>,
-  {
-    Self::wrap(limbs)
-  }
-
-  /// Creates an integer from its 64-bit limbs, least significant first, or returns `None` if they
-  /// hold `2^Bits` or more: a bit at index `Bits` or above is set.
-  ///
-  /// For a width that fills its limbs, this never returns `None`.
-  ///
-  /// ```
-  /// use numo::{Uint, typenum::U65};
-  ///
-  /// type U65x2 = Uint<U65, [u64; 2]>;
-  ///
-  /// // 2^64 + 1 and 2^65 - 1 have 65 bits, and 2^65 has 66.
-  /// assert_eq!(
-  ///   U65x2::checked_from_limbs([1, 1]).unwrap().to_string(),
-  ///   "18446744073709551617"
-  /// );
-  /// assert_eq!(U65x2::checked_from_limbs([u64::MAX, 1]), Some(U65x2::MAX));
-  /// assert_eq!(U65x2::checked_from_limbs([0, 2]), None);
-  /// ```
-  #[must_use]
-  #[inline]
-  pub const fn checked_from_limbs(limbs: [u64; N]) -> Option<Self> {
-    if int::limbs::fits_bits(&limbs, Self::BITS) {
-      Some(Self::wrap(limbs))
-    } else {
-      None
-    }
-  }
-}
-
-impl<B, const N: usize> Uint<B, [u64; N]> {
-  /// Returns the 64-bit limbs of the value, least significant first. The bits above `Bits`, if any,
-  /// are zero.
-  #[must_use]
-  #[inline]
-  pub const fn to_limbs(self) -> [u64; N] {
-    self.repr
-  }
-
-  /// Borrows the 64-bit limbs of the value, least significant first. The bits above `Bits`, if any,
-  /// are zero.
-  #[must_use]
-  #[inline]
-  pub const fn as_limbs(&self) -> &[u64; N] {
-    &self.repr
-  }
-
-  /// Returns `true` if the value is zero.
-  #[must_use]
-  #[inline]
-  pub const fn is_zero(&self) -> bool {
-    int::limbs::is_zero(&self.repr)
-  }
-}
-
 impl<B, R> Int<B, R> {
   /// Wraps `repr`. Requires it to hold a value of `Bits` bits.
   #[inline]
@@ -232,100 +149,245 @@ impl<B, R> Int<B, R> {
   }
 }
 
-impl<B, const N: usize> Int<B, [u64; N]>
-where
-  B: FitsBits<[u64; N]>,
-{
-  /// The number of bits, `Bits`, including the sign bit.
-  pub const BITS: u32 = B::U32;
+/// Generates the constants and the `const fn`s of [`Uint`] and [`Int`] over the arrays of each limb
+/// type, written `limb, bits, lower, upper;`, where `bits` is the number of bits of a limb and
+/// `lower` and `upper` are the modules of its limb layers, and followed by the examples of
+/// `checked_from_limbs` for `Uint` and for `Int`.
+// Trait methods cannot be `const`, so each limb type has inherent impls of its own.
+macro_rules! array_integers {
+  ($(
+    $limb:ident, $bits:literal, $lower:ident, $upper:ident;
+    Uint: { $(#[$uint_example:meta])* }
+    Int: { $(#[$int_example:meta])* }
+  )+) => {$(
+    impl<B, const N: usize> Uint<B, [$limb; N]>
+    where
+      B: FitsBits<[$limb; N]>,
+    {
+      /// The number of bits, `Bits`.
+      pub const BITS: u32 = B::U32;
 
-  /// Zero.
-  pub const ZERO: Self = Self::wrap([0; N]);
+      /// Zero.
+      pub const ZERO: Self = Self::wrap([0; N]);
 
-  /// The smallest value, `-2^(Bits - 1)`.
-  pub const MIN: Self = Self::wrap(int::signed_limbs::min_of_bits(Self::BITS));
+      /// The smallest value, zero.
+      pub const MIN: Self = Self::ZERO;
 
-  /// The largest value, `2^(Bits - 1) - 1`.
-  pub const MAX: Self = Self::wrap(int::signed_limbs::max_of_bits(Self::BITS));
+      /// The largest value, `2^Bits - 1`.
+      pub const MAX: Self = Self::wrap(int::$lower::max_of_bits(Self::BITS));
 
-  /// Creates an integer from its 64-bit limbs, least significant first, in two's complement.
-  ///
-  /// `Bits` fills the limbs, so every bit pattern is a value and this never fails. For a width that
-  /// leaves bits unused, [`checked_from_limbs`](Self::checked_from_limbs) checks the limbs instead.
-  #[must_use]
-  #[inline]
-  pub const fn from_limbs(limbs: [u64; N]) -> Self
-  where
-    B: FillsRepr<[u64; N]>,
-  {
-    Self::wrap(limbs)
-  }
+      #[doc = concat!(
+        "Creates an integer from its ",
+        stringify!($bits),
+        "-bit limbs, least significant first."
+      )]
+      ///
+      /// `Bits` fills the limbs, so every bit pattern is a value and this never fails. For a width that
+      /// leaves bits unused, [`checked_from_limbs`](Self::checked_from_limbs) checks the limbs instead.
+      #[must_use]
+      #[inline]
+      pub const fn from_limbs(limbs: [$limb; N]) -> Self
+      where
+        B: FillsRepr<[$limb; N]>,
+      {
+        Self::wrap(limbs)
+      }
 
-  /// Creates an integer from its 64-bit limbs, least significant first, in two's complement, or
-  /// returns `None` if the integer they hold is below `-2^(Bits - 1)` or above `2^(Bits - 1) - 1`:
-  /// a bit at index `Bits - 1` or above differs from the top bit of the limbs.
-  ///
-  /// For a width that fills its limbs, this never returns `None`.
-  ///
-  /// ```
-  /// use numo::{Int, typenum::U7};
-  ///
-  /// type I7 = Int<U7, [u64; 1]>;
-  ///
-  /// // -1, every bit set, and 63, the largest value.
-  /// assert!(I7::checked_from_limbs([u64::MAX]).unwrap().is_negative());
-  /// assert_eq!(I7::checked_from_limbs([63]), Some(I7::MAX));
-  /// // 127 and -65 need 8 bits.
-  /// assert_eq!(I7::checked_from_limbs([127]), None);
-  /// assert_eq!(I7::checked_from_limbs([-65i64 as u64]), None);
-  /// ```
-  #[must_use]
-  #[inline]
-  pub const fn checked_from_limbs(limbs: [u64; N]) -> Option<Self> {
-    if int::signed_limbs::fits_bits(&limbs, Self::BITS) {
-      Some(Self::wrap(limbs))
-    } else {
-      None
+      // Each line of this documentation starts with a space, as each line of the examples does, so
+      // that rustdoc removes one space from every line.
+      #[doc = concat!(
+        " Creates an integer from its ",
+        stringify!($bits),
+        "-bit limbs, least significant first, or returns `None` if they"
+      )]
+      #[doc = " hold `2^Bits` or more: a bit at index `Bits` or above is set."]
+      #[doc = ""]
+      #[doc = " For a width that fills its limbs, this never returns `None`."]
+      #[doc = ""]
+      $(#[$uint_example])*
+      #[must_use]
+      #[inline]
+      pub const fn checked_from_limbs(limbs: [$limb; N]) -> Option<Self> {
+        if int::$lower::fits_bits(&limbs, Self::BITS) {
+          Some(Self::wrap(limbs))
+        } else {
+          None
+        }
+      }
     }
-  }
+
+    impl<B, const N: usize> Uint<B, [$limb; N]> {
+      #[doc = concat!(
+        "Returns the ",
+        stringify!($bits),
+        "-bit limbs of the value, least significant first. The bits above `Bits`, if any,"
+      )]
+      /// are zero.
+      #[must_use]
+      #[inline]
+      pub const fn to_limbs(self) -> [$limb; N] {
+        self.repr
+      }
+
+      #[doc = concat!(
+        "Borrows the ",
+        stringify!($bits),
+        "-bit limbs of the value, least significant first. The bits above `Bits`, if any,"
+      )]
+      /// are zero.
+      #[must_use]
+      #[inline]
+      pub const fn as_limbs(&self) -> &[$limb; N] {
+        &self.repr
+      }
+
+      /// Returns `true` if the value is zero.
+      #[must_use]
+      #[inline]
+      pub const fn is_zero(&self) -> bool {
+        int::$lower::is_zero(&self.repr)
+      }
+    }
+
+    impl<B, const N: usize> Int<B, [$limb; N]>
+    where
+      B: FitsBits<[$limb; N]>,
+    {
+      /// The number of bits, `Bits`, including the sign bit.
+      pub const BITS: u32 = B::U32;
+
+      /// Zero.
+      pub const ZERO: Self = Self::wrap([0; N]);
+
+      /// The smallest value, `-2^(Bits - 1)`.
+      pub const MIN: Self = Self::wrap(int::$upper::min_of_bits(Self::BITS));
+
+      /// The largest value, `2^(Bits - 1) - 1`.
+      pub const MAX: Self = Self::wrap(int::$upper::max_of_bits(Self::BITS));
+
+      #[doc = concat!(
+        "Creates an integer from its ",
+        stringify!($bits),
+        "-bit limbs, least significant first, in two's complement."
+      )]
+      ///
+      /// `Bits` fills the limbs, so every bit pattern is a value and this never fails. For a width that
+      /// leaves bits unused, [`checked_from_limbs`](Self::checked_from_limbs) checks the limbs instead.
+      #[must_use]
+      #[inline]
+      pub const fn from_limbs(limbs: [$limb; N]) -> Self
+      where
+        B: FillsRepr<[$limb; N]>,
+      {
+        Self::wrap(limbs)
+      }
+
+      // Each line of this documentation starts with a space, as each line of the examples does, so
+      // that rustdoc removes one space from every line.
+      #[doc = concat!(
+        " Creates an integer from its ",
+        stringify!($bits),
+        "-bit limbs, least significant first, in two's complement, or"
+      )]
+      #[doc = concat!(
+        " returns `None` if the integer they hold is below `-2^(Bits - 1)` or above ",
+        "`2^(Bits - 1) - 1`:"
+      )]
+      #[doc = " a bit at index `Bits - 1` or above differs from the top bit of the limbs."]
+      #[doc = ""]
+      #[doc = " For a width that fills its limbs, this never returns `None`."]
+      #[doc = ""]
+      $(#[$int_example])*
+      #[must_use]
+      #[inline]
+      pub const fn checked_from_limbs(limbs: [$limb; N]) -> Option<Self> {
+        if int::$upper::fits_bits(&limbs, Self::BITS) {
+          Some(Self::wrap(limbs))
+        } else {
+          None
+        }
+      }
+    }
+
+    impl<B, const N: usize> Int<B, [$limb; N]> {
+      #[doc = concat!(
+        "Returns the ",
+        stringify!($bits),
+        "-bit limbs of the value, least significant first, in two's complement. The bits"
+      )]
+      /// above `Bits`, if any, are copies of the sign bit.
+      #[must_use]
+      #[inline]
+      pub const fn to_limbs(self) -> [$limb; N] {
+        self.repr
+      }
+
+      #[doc = concat!(
+        "Borrows the ",
+        stringify!($bits),
+        "-bit limbs of the value, least significant first, in two's complement. The bits"
+      )]
+      /// above `Bits`, if any, are copies of the sign bit.
+      #[must_use]
+      #[inline]
+      pub const fn as_limbs(&self) -> &[$limb; N] {
+        &self.repr
+      }
+
+      /// Returns `true` if the value is zero.
+      #[must_use]
+      #[inline]
+      pub const fn is_zero(&self) -> bool {
+        int::$upper::is_zero(&self.repr)
+      }
+
+      /// Returns `true` if the value is negative.
+      #[must_use]
+      #[inline]
+      pub const fn is_negative(&self) -> bool {
+        int::$upper::is_negative(&self.repr)
+      }
+
+      /// Returns `true` if the value is positive.
+      #[must_use]
+      #[inline]
+      pub const fn is_positive(&self) -> bool {
+        int::$upper::is_positive(&self.repr)
+      }
+    }
+  )+};
 }
 
-impl<B, const N: usize> Int<B, [u64; N]> {
-  /// Returns the 64-bit limbs of the value, least significant first, in two's complement. The bits
-  /// above `Bits`, if any, are copies of the sign bit.
-  #[must_use]
-  #[inline]
-  pub const fn to_limbs(self) -> [u64; N] {
-    self.repr
+array_integers! {
+  u64, 64, limbs, signed_limbs;
+  Uint: {
+    /// ```
+    /// use numo::{Uint, typenum::U65};
+    ///
+    /// type U65x2 = Uint<U65, [u64; 2]>;
+    ///
+    /// // 2^64 + 1 and 2^65 - 1 have 65 bits, and 2^65 has 66.
+    /// assert_eq!(
+    ///   U65x2::checked_from_limbs([1, 1]).unwrap().to_string(),
+    ///   "18446744073709551617"
+    /// );
+    /// assert_eq!(U65x2::checked_from_limbs([u64::MAX, 1]), Some(U65x2::MAX));
+    /// assert_eq!(U65x2::checked_from_limbs([0, 2]), None);
+    /// ```
   }
-
-  /// Borrows the 64-bit limbs of the value, least significant first, in two's complement. The bits
-  /// above `Bits`, if any, are copies of the sign bit.
-  #[must_use]
-  #[inline]
-  pub const fn as_limbs(&self) -> &[u64; N] {
-    &self.repr
-  }
-
-  /// Returns `true` if the value is zero.
-  #[must_use]
-  #[inline]
-  pub const fn is_zero(&self) -> bool {
-    int::signed_limbs::is_zero(&self.repr)
-  }
-
-  /// Returns `true` if the value is negative.
-  #[must_use]
-  #[inline]
-  pub const fn is_negative(&self) -> bool {
-    int::signed_limbs::is_negative(&self.repr)
-  }
-
-  /// Returns `true` if the value is positive.
-  #[must_use]
-  #[inline]
-  pub const fn is_positive(&self) -> bool {
-    int::signed_limbs::is_positive(&self.repr)
+  Int: {
+    /// ```
+    /// use numo::{Int, typenum::U7};
+    ///
+    /// type I7 = Int<U7, [u64; 1]>;
+    ///
+    /// // -1, every bit set, and 63, the largest value.
+    /// assert!(I7::checked_from_limbs([u64::MAX]).unwrap().is_negative());
+    /// assert_eq!(I7::checked_from_limbs([63]), Some(I7::MAX));
+    /// // 127 and -65 need 8 bits.
+    /// assert_eq!(I7::checked_from_limbs([127]), None);
+    /// assert_eq!(I7::checked_from_limbs([-65i64 as u64]), None);
+    /// ```
   }
 }
 
