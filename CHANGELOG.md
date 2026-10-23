@@ -44,6 +44,15 @@ FEATURES
   in every format, and `RoundingMode` as the name of its variant, without allocation. The impls use
   `serde_core`, so they need `serde` 1.0.220 or later in the build; the feature enables no feature
   of any other crate.
+- The `arbitrary`, `proptest` and `quickcheck` features: the `Arbitrary` trait of each crate for
+  `Decimal` and `RoundingMode`, for fuzzing and property tests on a target with `std`. One generator
+  serves all three: an edge value one time in eight (zero, one unit in the last place, one, `MAX`,
+  powers of ten, runs of nines and the rounding ties `5 * 10^k` and `15 * 10^k`), and otherwise a
+  number of digits chosen uniformly and then uniform digits, with trailing zeros one time in four,
+  so that every magnitude is common. `proptest` and `quickcheck` shrink a decimal by truncating its
+  digits and a rounding mode toward `Down`. The `proptest` feature adds `numo::proptest`, with
+  `DecimalStrategy` and `DecimalValueTree`, and the `quickcheck` feature allocates only the boxed
+  iterator that its trait requires shrinking to return.
 - `Uint<Bits, Repr>` and `Int<Bits, Repr>`, with the aliases `u192`, `u256`, `u320`, `u384`, `u448`,
   `u512`, `i192`, `i256`, `i320`, `i384`, `i448` and `i512` over 64-bit limbs: `const fn`
   `from_limbs` and `to_limbs` (least significant limb first, two's complement for `Int`), `ZERO`,

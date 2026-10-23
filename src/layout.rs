@@ -107,6 +107,15 @@ mod sealed {
     /// the first digit.
     fn write_digits(self, buf: &mut DigitBuf, token: Token) -> usize;
 
+    /// Appends the ASCII digits in `bytes[start..end]` to `self`, computing `self * 10 + d` for
+    /// each digit `d` and skipping every other byte. Requires `self` not to be negative and a
+    /// representable result.
+    fn push_digits(self, bytes: &[u8], start: usize, end: usize, token: Token) -> Self;
+
+    /// `-self`, or `None` if it is not representable, which for an unsigned storage is every value
+    /// but zero. Requires, for a signed storage, that `self` is not `MIN`, which no coefficient is.
+    fn checked_neg(self, token: Token) -> Option<Self>;
+
     /// Converts the value to `Target`. Requires it to be representable there, so not negative for
     /// an unsigned `Target`.
     fn convert<Target: SealedStorage>(self, token: Token) -> Target;
@@ -418,6 +427,11 @@ macro_rules! impl_storage {
           }
         }
 
+        #[inline]
+        fn checked_neg(self, _: Token) -> Option<Self> {
+          Some(int::$int::neg(self))
+        }
+
         impl_storage!(@shared $int);
       }
 
@@ -440,6 +454,15 @@ macro_rules! impl_storage {
         #[inline]
         fn round_div(self, divisor: Self, mode: RoundingMode, _: Token) -> Self {
           int::$uint::round_div(self, divisor, mode).0
+        }
+
+        #[inline]
+        fn checked_neg(self, _: Token) -> Option<Self> {
+          if int::$uint::is_zero(self) {
+            Some(self)
+          } else {
+            None
+          }
         }
 
         impl_storage!(@shared $uint);
@@ -483,6 +506,11 @@ macro_rules! impl_storage {
     #[inline]
     fn write_digits(self, buf: &mut DigitBuf, _: Token) -> usize {
       int::$repr::write_digits(self, buf)
+    }
+
+    #[inline]
+    fn push_digits(self, bytes: &[u8], start: usize, end: usize, _: Token) -> Self {
+      int::$repr::push_digits(self, bytes, start, end)
     }
 
     #[inline]

@@ -17,8 +17,19 @@ harness = false
 [features]
 # Only `serde_core`, without default features: turns on no feature of any other crate in a build.
 serde = ["dep:serde_core"]
+# `arbitrary`, which uses `std`: generation for fuzzing on a hosted target.
+arbitrary = ["dep:arbitrary"]
+# `proptest` with only its `std` feature: generation and shrinking for property tests on a hosted
+# target.
+proptest = ["dep:proptest"]
+# `quickcheck` without its default features, `regex` and `use_logging`: generation and shrinking
+# for property tests on a hosted target. Its trait makes shrinking return a boxed iterator.
+quickcheck = ["dep:quickcheck"]
 
 [dependencies]
+arbitrary = { version = "1", optional = true }
+proptest = { version = "1", default-features = false, features = ["std"], optional = true }
+quickcheck = { version = "1", default-features = false, optional = true }
 serde_core = { version = "1", default-features = false, optional = true }
 typenum = { version = "1.20", features = ["const-generics"] }
 
