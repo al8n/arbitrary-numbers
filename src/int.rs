@@ -34,8 +34,14 @@ pub(crate) const DIGIT_BUF_LEN: usize = 155;
 // The modules below shadow the primitive type names in this module.
 pub(crate) type DigitBuf = [core::primitive::u8; DIGIT_BUF_LEN];
 
+mod half_limbs;
 mod limb_layer;
 pub(crate) mod limbs;
+#[cfg_attr(
+  not(test),
+  expect(dead_code, reason = "only the -Dwarnings test build lints it fully")
+)]
+pub(crate) mod limbs128;
 #[cfg_attr(
   not(test),
   expect(dead_code, reason = "only the -Dwarnings test build lints it fully")
@@ -52,6 +58,11 @@ pub(crate) mod limbs32;
 )]
 pub(crate) mod limbs8;
 pub(crate) mod signed_limbs;
+#[cfg_attr(
+  not(test),
+  expect(dead_code, reason = "only the -Dwarnings test build lints it fully")
+)]
+pub(crate) mod signed_limbs128;
 #[cfg_attr(
   not(test),
   expect(dead_code, reason = "only the -Dwarnings test build lints it fully")
