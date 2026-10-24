@@ -5,7 +5,7 @@ error[E0277]: the storage cannot hold `Bits` bits
   |                                 ^^^^^^^^^^^^^^^^^^ `Bits` is greater than the bits of the storage
   |
   = help: the trait `numo::width::sealed::BitsFit` is not implemented for `B0`
-  = note: `[u64; N]` holds `64 * N` bits
+  = note: `[u8; N]`, `[u16; N]`, `[u32; N]` and `[u64; N]` hold `8 * N`, `16 * N`, `32 * N` and `64 * N` bits
 help: the trait `numo::width::sealed::BitsFit` is implemented for `B1`
  --> src/width.rs
   |

@@ -75,22 +75,25 @@
 //! # Integers
 //!
 //! [`Uint<Bits, Repr>`](Uint) and [`Int<Bits, Repr>`](Int) are integers of `Bits` bits, unsigned
-//! and in two's complement, stored in an array `[u64; N]` of 64-bit limbs, least significant first,
-//! that holds at least `Bits` bits. The module [`aliases`] names the widths of the wide storages
-//! above and 768, 1024, 2048 and 4096 bits, each of which fills its limbs; any other width is
-//! written out, such as `Uint<U200, [u64; 4]>`. [`FitsBits`] relates a width to the storages that
-//! hold it, and [`FillsRepr`] to the storage that it fills.
+//! and in two's complement, stored in an array of limbs, least significant first, that holds at
+//! least `Bits` bits: `[u64; N]`, `[u32; N]`, `[u16; N]` or `[u8; N]`. `[u64; N]` is the fastest
+//! storage on 64-bit targets, `[u32; N]` suits 32-bit targets, and `[u8; N]` has alignment 1 and
+//! holds the little-endian bytes of the value on every target. The module [`aliases`] names the
+//! widths of the wide storages above and 768, 1024, 2048 and 4096 bits in 64-bit limbs, each of
+//! which fills its limbs; any other width or limb type is written out, such as
+//! `Uint<U200, [u64; 4]>` or `Uint<U24, [u8; 3]>`. [`FitsBits`] relates a width to the storages
+//! that hold it, and [`FillsRepr`] to the storages that it fills.
 //!
 //! Each type has the constants `BITS`, `ZERO`, `MIN` and `MAX`. Its `const fn` constructors are
 //! `from_limbs`, for a width that fills its limbs, and `checked_from_limbs`, which checks that the
 //! limbs hold a value of `Bits` bits; its `const fn` methods are `to_limbs`, `as_limbs` and
 //! `is_zero`, and for `Int` also `is_negative` and `is_positive`. Values compare, hash and format
-//! by their numeric value. There is no integer arithmetic yet.
+//! by their numeric value, alike in every storage. There is no integer arithmetic yet.
 //!
 //! ```
 //! use numo::{
 //!   Int, Uint, i256,
-//!   typenum::{U7, U200},
+//!   typenum::{U7, U24, U200},
 //! };
 //!
 //! // A width that fills its limbs takes any bit pattern: -1 has every bit set.
@@ -102,6 +105,11 @@
 //! assert_eq!(U200x4::MAX.to_limbs(), [u64::MAX, u64::MAX, u64::MAX, 0xff]);
 //! assert_eq!(U200x4::checked_from_limbs([0, 0, 0, 0x100]), None);
 //! assert_eq!(Int::<U7, [u64; 1]>::MIN.to_string(), "-64");
+//!
+//! // Three bytes, least significant first, hold the same value as one 64-bit limb.
+//! let bytes = Uint::<U24, [u8; 3]>::from_limbs([1, 2, 3]);
+//! let word = Uint::<U24, [u64; 1]>::checked_from_limbs([0x03_02_01]).unwrap();
+//! assert_eq!(bytes.to_string(), word.to_string());
 //! ```
 //!
 //! # `typenum`

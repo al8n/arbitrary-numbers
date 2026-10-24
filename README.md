@@ -28,7 +28,7 @@ checked during type checking, so no value can be created for a type that cannot 
 | Family | Status |
 |---|---|
 | `Decimal<Integral, Fraction, Repr>`: exact fixed-point decimal numbers | Available |
-| `Uint<Bits, Repr>` and `Int<Bits, Repr>`: integers of any bit width | Any width in 64-bit limbs, with constants, checked construction, comparison, hashing and formatting; arithmetic planned |
+| `Uint<Bits, Repr>` and `Int<Bits, Repr>`: integers of any bit width | Any width in limbs of 8, 16, 32 or 64 bits, with constants, checked construction, comparison, hashing and formatting; arithmetic planned |
 | Floating-point types for standard formats such as `f16`, `bf16` and `f128` | Planned |
 | Atomic versions of the integer types | Planned |
 
@@ -138,22 +138,24 @@ fn main() -> Result<(), ParseError> {
 
 ## Integers
 
-`Uint<Bits, Repr>` and `Int<Bits, Repr>` hold any width `Bits` in an array `[u64; N]` of 64-bit
-limbs that has at least `Bits` bits, least significant limb first, in two's complement for `Int`.
-The aliases name the widths that fill their limbs: the wide storages above, and `u768`, `u1024`,
-`u2048` and `u4096` with their signed counterparts. Any other width is written out, such as
-`Uint<U200, [u64; 4]>`.
+`Uint<Bits, Repr>` and `Int<Bits, Repr>` hold any width `Bits` in an array of limbs that has at
+least `Bits` bits, least significant limb first, in two's complement for `Int`: `[u64; N]`,
+`[u32; N]`, `[u16; N]` or `[u8; N]`. `[u64; N]` is the fastest on 64-bit targets, `[u32; N]` suits
+32-bit targets, and `[u8; N]` has alignment 1 and holds the little-endian bytes of the value on
+every target. The aliases name the widths that fill 64-bit limbs: the wide storages above, and
+`u768`, `u1024`, `u2048` and `u4096` with their signed counterparts. Any other width or limb type
+is written out, such as `Uint<U200, [u64; 4]>` or `Uint<U24, [u8; 3]>`.
 
 - `const` items and methods: `BITS`, `ZERO`, `MIN` and `MAX`; `from_limbs` for a width that fills
   its limbs, and `checked_from_limbs` for any width, which returns `None` unless the limbs hold a
   value of `Bits` bits; `to_limbs`, `as_limbs` and `is_zero`, plus `is_negative` and `is_positive`
   for `Int`.
 - Numeric equality, ordering and hashing, where the hash depends only on the value and `Bits`,
-  decimal formatting, and `Default`, which is zero.
+  whatever the storage, decimal formatting, and `Default`, which is zero.
 - A width that its storage cannot hold, zero bits, or `2^32` bits or more is rejected during type
   checking.
 
-Their arithmetic and other limb types are planned.
+Their arithmetic and 128-bit limbs are planned.
 
 #### License
 

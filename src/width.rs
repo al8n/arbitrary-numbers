@@ -4,17 +4,19 @@
 use core::{cmp::Ordering, fmt, hash::Hasher, ops::Shl};
 
 use typenum::{
-  Const, IsEqual, IsLess, IsLessOrEqual, Le, LeEq, NonZero, Shleft, ToUInt, U, U6, U4294967296,
-  Unsigned,
+  Const, IsEqual, IsLess, IsLessOrEqual, Le, LeEq, NonZero, Shleft, ToUInt, U, U3, U4, U5, U6,
+  U4294967296, Unsigned,
 };
 
 use sealed::{
-  BitsBelow2Pow32, BitsFit, ReprFilled, SealedFillsRepr, SealedFitsBits, SealedIntRepr,
+  ArrayLimb, BitsBelow2Pow32, BitsFit, ReprFilled, SealedFillsRepr, SealedFitsBits, SealedIntRepr,
   SealedUintRepr,
 };
 
 use crate::{
-  int::{limbs, signed_limbs},
+  int::{
+    limbs, limbs8, limbs16, limbs32, signed_limbs, signed_limbs8, signed_limbs16, signed_limbs32,
+  },
   layout::Token,
 };
 
@@ -29,12 +31,13 @@ mod sealed {
   /// Seals [`FillsRepr`](super::FillsRepr).
   pub trait SealedFillsRepr<Repr> {}
 
-  /// Implemented only for `B1`, the result of `Bits <= 64 * N` when `[u64; N]` holds `Bits` bits.
+  /// Implemented only for `B1`, the result of `Bits <= B * N` when `[L; N]`, of limbs of `B` bits,
+  /// holds `Bits` bits.
   // The message and label name no storage, so that every storage can share them.
   #[diagnostic::on_unimplemented(
     message = "the storage cannot hold `Bits` bits",
     label = "`Bits` is greater than the bits of the storage",
-    note = "`[u64; N]` holds `64 * N` bits"
+    note = "`[u8; N]`, `[u16; N]`, `[u32; N]` and `[u64; N]` hold `8 * N`, `16 * N`, `32 * N` and `64 * N` bits"
   )]
   pub trait BitsFit {}
 
@@ -51,16 +54,23 @@ mod sealed {
 
   impl BitsBelow2Pow32 for typenum::B1 {}
 
-  /// Implemented only for `B1`, the result of `Bits == 64 * N` when `Bits` fills `[u64; N]`.
+  /// Implemented only for `B1`, the result of `Bits == B * N` when `Bits` fills `[L; N]`, of limbs
+  /// of `B` bits.
   #[diagnostic::on_unimplemented(
     message = "`Bits` does not fill the storage",
     label = "`Bits` is less than the bits of the storage",
-    note = "`[u64; N]` holds `64 * N` bits",
+    note = "`[u8; N]`, `[u16; N]`, `[u32; N]` and `[u64; N]` hold `8 * N`, `16 * N`, `32 * N` and `64 * N` bits",
     note = "`checked_from_limbs` takes the limbs of any width that fits and checks the value"
   )]
   pub trait ReprFilled {}
 
   impl ReprFilled for typenum::B1 {}
+
+  /// A limb type of the array storages: `[L; N]` holds `N << L::BitsLog2` bits.
+  pub trait ArrayLimb {
+    /// The base-2 logarithm of the number of bits of a limb.
+    type BitsLog2;
+  }
 
   /// Seals [`UintRepr`](super::UintRepr) and gives the trait implementations of
   /// [`Uint`](crate::Uint) access to the integer core.
@@ -75,8 +85,8 @@ mod sealed {
     /// Compares the values of `self` and `other`.
     fn compare(&self, other: &Self, token: Token) -> Ordering;
 
-    /// Writes the lowest `ceil(bits / 64)` 64-bit limbs of the value to `state`, least significant
-    /// first. Requires the value to have `bits` bits.
+    /// Writes the lowest `ceil(bits / 64)` 64-bit words of the value to `state`, least significant
+    /// first, extended by zeros beyond the storage. Requires the value to have `bits` bits.
     fn hash_limbs<H: Hasher>(&self, bits: u32, state: &mut H, token: Token);
 
     /// Writes the value in decimal, honoring the flags of `f` as integers do.
@@ -95,8 +105,9 @@ mod sealed {
     /// Compares the values of `self` and `other`.
     fn compare(&self, other: &Self, token: Token) -> Ordering;
 
-    /// Writes the lowest `ceil(bits / 64)` 64-bit limbs of the value in two's complement to
-    /// `state`, least significant first. Requires the value to have `bits` bits.
+    /// Writes the lowest `ceil(bits / 64)` 64-bit words of the value in two's complement to
+    /// `state`, least significant first, extended by copies of the sign beyond the storage.
+    /// Requires the value to have `bits` bits.
     fn hash_limbs<H: Hasher>(&self, bits: u32, state: &mut H, token: Token);
 
     /// Writes the value in decimal, honoring the flags of `f` as integers do.
@@ -107,11 +118,14 @@ mod sealed {
 /// Marks that `Repr` holds every value of `Self` bits.
 ///
 /// `Self` is a [`typenum`] number from 1 to `2^32 - 1`, so that the constant `BITS`, a `u32`, holds
-/// it. The array `[u64; N]` holds up to `64 * N` bits, for every `N` for which `typenum` implements
-/// `ToUInt` for `Const<N>`: each `N` up to 1024, and larger ones such as the powers of 2 and of 10.
-/// A storage may have more bits than needed, as `[u64; 4]` has for 200 bits. [`Uint`](crate::Uint)
-/// and [`Int`](crate::Int) require this bound on their constants, constructors and `Default`, not
-/// on the types themselves, so generic code adds it where it uses them:
+/// it. The arrays `[u8; N]`, `[u16; N]`, `[u32; N]` and `[u64; N]` hold up to `8 * N`, `16 * N`,
+/// `32 * N` and `64 * N` bits, for every `N` for which `typenum` implements `ToUInt` for
+/// `Const<N>`: each `N` up to 1024, and larger ones such as the powers of 2 and of 10. An array of
+/// any other length, such as `[u8; 1025]`, holds no width, so the integers stored in it have no
+/// constants, constructors or `Default`, and no value of them can be made. A storage may have more
+/// bits than needed, as `[u64; 4]` has for 200 bits. [`Uint`](crate::Uint) and
+/// [`Int`](crate::Int) require this bound on their constants, constructors and `Default`, not on
+/// the types themselves, so generic code adds it where it uses them:
 ///
 /// ```
 /// use numo::{FitsBits, Uint};
@@ -137,10 +151,11 @@ impl<B, R> FitsBits<R> for B where B: Unsigned + NonZero + SealedFitsBits<R> {}
 
 /// Marks that `Self` bits fill `Repr` exactly, so that every bit pattern of `Repr` is a value.
 ///
-/// `64 * N` bits fill the array `[u64; N]`. The constructor `from_limbs` of
-/// [`Uint`](crate::Uint::from_limbs) and [`Int`](crate::Int::from_limbs) requires this bound and
-/// never fails; `checked_from_limbs` takes the limbs of any width that fits and checks the value.
-/// This trait is sealed and cannot be implemented outside this crate.
+/// `8 * N`, `16 * N`, `32 * N` and `64 * N` bits fill the arrays `[u8; N]`, `[u16; N]`, `[u32; N]`
+/// and `[u64; N]`. The constructor `from_limbs` of [`Uint`](crate::Uint::from_limbs) and
+/// [`Int`](crate::Int::from_limbs) requires this bound and never fails; `checked_from_limbs` takes
+/// the limbs of any width that fits and checks the value. This trait is sealed and cannot be
+/// implemented outside this crate.
 #[diagnostic::on_unimplemented(
   message = "`Bits` must fill the storage exactly",
   label = "`Bits` is not known to fill the storage",
@@ -150,118 +165,151 @@ pub trait FillsRepr<Repr>: FitsBits<Repr> + SealedFillsRepr<Repr> {}
 
 impl<B, R> FillsRepr<R> for B where B: FitsBits<R> + SealedFillsRepr<R> {}
 
-/// `64 * N`, the number of bits of `[u64; N]`.
-type LimbBits<const N: usize> = Shleft<U<N>, U6>;
+/// `N * B` for limbs of `B` bits, the number of bits of `[L; N]`.
+type LimbBits<L, const N: usize> = Shleft<U<N>, <L as ArrayLimb>::BitsLog2>;
 
 // The bound below 2^32 is a comparison of types, because `typenum`'s `U32` and `U64` wrap: for
 // `64 * 2^58` bits, both are zero.
-impl<B, const N: usize> SealedFitsBits<[u64; N]> for B
+impl<B, L: ArrayLimb, const N: usize> SealedFitsBits<[L; N]> for B
 where
-  B: IsLessOrEqual<LimbBits<N>> + IsLess<U4294967296>,
+  B: IsLessOrEqual<LimbBits<L, N>> + IsLess<U4294967296>,
   Const<N>: ToUInt,
-  U<N>: Shl<U6>,
-  LeEq<B, LimbBits<N>>: BitsFit,
+  U<N>: Shl<L::BitsLog2>,
+  LeEq<B, LimbBits<L, N>>: BitsFit,
   Le<B, U4294967296>: BitsBelow2Pow32,
 {
 }
 
 // `typenum`'s alias for `IsEqual::Output` is named `Eq`, as the trait of `core` is.
-impl<B, const N: usize> SealedFillsRepr<[u64; N]> for B
+impl<B, L: ArrayLimb, const N: usize> SealedFillsRepr<[L; N]> for B
 where
-  B: IsEqual<LimbBits<N>>,
+  B: IsEqual<LimbBits<L, N>>,
   Const<N>: ToUInt,
-  U<N>: Shl<U6>,
-  <B as IsEqual<LimbBits<N>>>::Output: ReprFilled,
+  U<N>: Shl<L::BitsLog2>,
+  <B as IsEqual<LimbBits<L, N>>>::Output: ReprFilled,
 {
 }
 
-/// A storage of [`Uint`](crate::Uint): the array `[u64; N]` holds an unsigned integer in `N`
-/// 64-bit limbs, least significant first.
+/// A storage of [`Uint`](crate::Uint): the array `[u8; N]`, `[u16; N]`, `[u32; N]` or `[u64; N]`
+/// holds an unsigned integer in `N` limbs of 8, 16, 32 or 64 bits, least significant first.
 ///
 /// `Uint<Bits, Repr>` implements `Ord`, `Hash`, `Display`, `Debug` and `Default` for every `Repr`
 /// that implements this trait. This trait is sealed and cannot be implemented outside this crate.
 pub trait UintRepr: Eq + SealedUintRepr {}
 
-/// A storage of [`Int`](crate::Int): the array `[u64; N]` holds a signed integer in `N` 64-bit
-/// limbs, least significant first, in two's complement.
+/// A storage of [`Int`](crate::Int): the array `[u8; N]`, `[u16; N]`, `[u32; N]` or `[u64; N]`
+/// holds a signed integer in `N` limbs of 8, 16, 32 or 64 bits, least significant first, in two's
+/// complement.
 ///
 /// `Int<Bits, Repr>` implements `Ord`, `Hash`, `Display`, `Debug` and `Default` for every `Repr`
 /// that implements this trait. This trait is sealed and cannot be implemented outside this crate.
 pub trait IntRepr: Eq + SealedIntRepr {}
 
-impl<const N: usize> UintRepr for [u64; N] {}
+/// Implements [`ArrayLimb`], [`UintRepr`] and [`IntRepr`] for the arrays of each limb type,
+/// written `limb: BitsLog2, lower, upper`, where `lower` and `upper` are the modules of its limb
+/// layers.
+macro_rules! array_storage {
+  ($($limb:ident: $bits_log2:ident, $lower:ident, $upper:ident);+ $(;)?) => {$(
+    impl ArrayLimb for $limb {
+      type BitsLog2 = $bits_log2;
+    }
 
-impl<const N: usize> SealedUintRepr for [u64; N] {
-  #[inline]
-  fn zero(_: Token) -> Self {
-    [0; N]
-  }
+    impl<const N: usize> UintRepr for [$limb; N] {}
 
-  #[inline]
-  fn compare(&self, other: &Self, _: Token) -> Ordering {
-    limbs::cmp(self, other)
-  }
+    impl<const N: usize> SealedUintRepr for [$limb; N] {
+      #[inline]
+      fn zero(_: Token) -> Self {
+        [0; N]
+      }
 
-  #[inline]
-  fn hash_limbs<H: Hasher>(&self, bits: u32, state: &mut H, _: Token) {
-    hash_low_limbs(self, bits, state);
-  }
+      #[inline]
+      fn compare(&self, other: &Self, _: Token) -> Ordering {
+        $lower::cmp(self, other)
+      }
 
-  #[inline]
-  fn fmt_decimal(&self, f: &mut fmt::Formatter<'_>, _: Token) -> fmt::Result {
-    fmt_magnitude(self, true, f)
+      #[inline]
+      fn hash_limbs<H: Hasher>(&self, bits: u32, state: &mut H, _: Token) {
+        hash_words(self, bits, 0, state);
+      }
+
+      #[inline]
+      fn fmt_decimal(&self, f: &mut fmt::Formatter<'_>, _: Token) -> fmt::Result {
+        fmt_magnitude::<_, N, { $lower::DIGITS_PER_LIMB }>(self, $lower::write_digits_into, true, f)
+      }
+    }
+
+    impl<const N: usize> IntRepr for [$limb; N] {}
+
+    impl<const N: usize> SealedIntRepr for [$limb; N] {
+      #[inline]
+      fn zero(_: Token) -> Self {
+        [0; N]
+      }
+
+      #[inline]
+      fn compare(&self, other: &Self, _: Token) -> Ordering {
+        $upper::cmp(self, other)
+      }
+
+      #[inline]
+      fn hash_limbs<H: Hasher>(&self, bits: u32, state: &mut H, _: Token) {
+        // The limbs above the sign bit hold its copies, so the lowest limbs hold the two's
+        // complement of the value, and the limbs beyond a storage narrower than the words read as
+        // further copies.
+        let fill = if $upper::is_negative(self) { $limb::MAX } else { 0 };
+        hash_words(self, bits, fill, state);
+      }
+
+      #[inline]
+      fn fmt_decimal(&self, f: &mut fmt::Formatter<'_>, _: Token) -> fmt::Result {
+        fmt_magnitude::<_, N, { $lower::DIGITS_PER_LIMB }>(
+          &$upper::unsigned_abs(self),
+          $lower::write_digits_into,
+          !$upper::is_negative(self),
+          f,
+        )
+      }
+    }
+  )+};
+}
+
+array_storage!(
+  u64: U6, limbs, signed_limbs;
+  u8: U3, limbs8, signed_limbs8;
+  u16: U4, limbs16, signed_limbs16;
+  u32: U5, limbs32, signed_limbs32;
+);
+
+/// Writes the lowest `ceil(bits / 64)` 64-bit words of the integer in `limbs` to `state`, least
+/// significant first, without the length prefix of a slice. Each word joins `64 / B` limbs of `B`
+/// bits, the least significant first, and a limb at index `limbs.len()` or above reads as `fill`.
+///
+/// Every storage of a value of `bits` bits writes the same words, so the hash does not depend on the
+/// limb type or the number of limbs.
+fn hash_words<L: Copy + Into<u64>, H: Hasher>(limbs: &[L], bits: u32, fill: L, state: &mut H) {
+  let per_word = size_of::<u64>() / size_of::<L>();
+  let limb_bits = u64::BITS / per_word as u32;
+  for word in 0..bits.div_ceil(64) as usize {
+    let mut value = 0;
+    for k in 0..per_word {
+      let limb = limbs.get(word * per_word + k).copied().unwrap_or(fill);
+      value |= limb.into() << (limb_bits * k as u32);
+    }
+    state.write_u64(value);
   }
 }
 
-impl<const N: usize> IntRepr for [u64; N] {}
-
-impl<const N: usize> SealedIntRepr for [u64; N] {
-  #[inline]
-  fn zero(_: Token) -> Self {
-    [0; N]
-  }
-
-  #[inline]
-  fn compare(&self, other: &Self, _: Token) -> Ordering {
-    signed_limbs::cmp(self, other)
-  }
-
-  #[inline]
-  fn hash_limbs<H: Hasher>(&self, bits: u32, state: &mut H, _: Token) {
-    // The limbs above the sign bit hold its copies, so the lowest limbs are the two's complement
-    // of the value in that many limbs.
-    hash_low_limbs(self, bits, state);
-  }
-
-  #[inline]
-  fn fmt_decimal(&self, f: &mut fmt::Formatter<'_>, _: Token) -> fmt::Result {
-    fmt_magnitude(
-      &signed_limbs::unsigned_abs(self),
-      !signed_limbs::is_negative(self),
-      f,
-    )
-  }
-}
-
-/// Writes the lowest `ceil(bits / 64)` limbs of `value` to `state`, least significant first,
-/// without the length prefix of a slice.
-fn hash_low_limbs<H: Hasher>(value: &[u64], bits: u32, state: &mut H) {
-  for &limb in &value[..bits.div_ceil(64) as usize] {
-    state.write_u64(limb);
-  }
-}
-
-/// Writes `magnitude` in decimal, negative unless `is_nonnegative`, honoring the flags of `f` as
-/// integers do.
-fn fmt_magnitude<const N: usize>(
-  magnitude: &[u64; N],
+/// Writes `magnitude` in decimal with `write_digits_into`, negative unless `is_nonnegative`,
+/// honoring the flags of `f` as integers do. Requires each limb to add at most `DIGITS` digits.
+fn fmt_magnitude<L, const N: usize, const DIGITS: usize>(
+  magnitude: &[L; N],
+  write_digits_into: impl FnOnce(&[L; N], &mut [u8]) -> usize,
   is_nonnegative: bool,
   f: &mut fmt::Formatter<'_>,
 ) -> fmt::Result {
-  // `2^64 < 10^20`, so each limb adds at most 20 digits.
-  let mut buf = [[0; 20]; N];
+  let mut buf = [[0; DIGITS]; N];
   let buf = buf.as_flattened_mut();
-  let start = limbs::write_digits_into(magnitude, buf);
+  let start = write_digits_into(magnitude, buf);
   f.pad_integral(is_nonnegative, "", ascii(&buf[start..])?)
 }
 

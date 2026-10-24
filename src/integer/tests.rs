@@ -7,8 +7,8 @@ use std::{collections::hash_map::RandomState, format, string::ToString, vec, vec
 use ::proptest::{prelude::*, test_runner::RngSeed};
 use num_bigint::{BigInt, Sign};
 use typenum::{
-  U1, U2, U7, U63, U64, U65, U100, U127, U128, U129, U160, U200, U255, U256, U257, U511, U1023,
-  U4294967295,
+  U1, U2, U7, U8, U9, U16, U17, U24, U32, U33, U63, U64, U65, U100, U127, U128, U129, U160, U200,
+  U255, U256, U257, U511, U1023, U4096, U8192, U16384, U32768, U65536, U4294967295, Unsigned,
 };
 
 use crate::{
@@ -58,6 +58,24 @@ fn recorded<T: Hash>(value: &T) -> Vec<Call> {
   let mut recorder = Recorder::default();
   value.hash(&mut recorder);
   recorder.calls
+}
+
+/// The calls that `Hash` makes for `value`, an integer of `bits` bits: one `write_u64` for each of
+/// its lowest `ceil(bits / 64)` 64-bit words in two's complement, least significant first.
+fn word_calls(value: &BigInt, bits: u32) -> Vec<Call> {
+  let count = bits.div_ceil(64) as usize;
+  // The shortest two's complement, extended by copies of the sign, or cut to the words when an
+  // unsigned value needs a zero byte above them.
+  let mut bytes = value.to_signed_bytes_le();
+  bytes.resize(
+    8 * count,
+    if value.sign() == Sign::Minus { 0xff } else { 0 },
+  );
+  let (words, _) = bytes.as_chunks::<8>();
+  words
+    .iter()
+    .map(|&word| Call::U64(u64::from_le_bytes(word)))
+    .collect()
 }
 
 #[test]
@@ -115,6 +133,31 @@ fn trait_surface_and_layout() {
   assert_eq!(align_of::<u4096>(), align_of::<u64>());
   assert_eq!(align_of::<i4096>(), align_of::<u64>());
   assert_eq!(size_of::<Option<u256>>(), size_of::<Option<[u64; 4]>>());
+
+  // The other limb types, whose arrays give the size and the alignment: 1 for bytes, and 2 and 4
+  // bytes for `u16` and `u32` on the usual targets.
+  assert_traits::<Uint<U24, [u8; 3]>>();
+  assert_traits::<Int<U24, [u8; 3]>>();
+  assert_traits::<Uint<U100, [u16; 7]>>();
+  assert_traits::<Int<U100, [u16; 7]>>();
+  assert_traits::<Uint<U100, [u32; 4]>>();
+  assert_traits::<Int<U100, [u32; 4]>>();
+  assert_eq!(size_of::<Uint<U24, [u8; 3]>>(), 3);
+  assert_eq!(size_of::<Int<U24, [u8; 3]>>(), 3);
+  assert_eq!(size_of::<Uint<U100, [u16; 7]>>(), 14);
+  assert_eq!(size_of::<Int<U100, [u16; 7]>>(), 14);
+  assert_eq!(size_of::<Uint<U100, [u32; 4]>>(), 16);
+  assert_eq!(size_of::<Int<U100, [u32; 4]>>(), 16);
+  assert_eq!(align_of::<Uint<U24, [u8; 3]>>(), 1);
+  assert_eq!(align_of::<Int<U24, [u8; 3]>>(), 1);
+  assert_eq!(align_of::<Uint<U100, [u16; 7]>>(), align_of::<u16>());
+  assert_eq!(align_of::<Int<U100, [u16; 7]>>(), align_of::<u16>());
+  assert_eq!(align_of::<Uint<U100, [u32; 4]>>(), align_of::<u32>());
+  assert_eq!(align_of::<Int<U100, [u32; 4]>>(), align_of::<u32>());
+  assert_eq!(
+    size_of::<Option<Uint<U24, [u8; 3]>>>(),
+    size_of::<Option<[u8; 3]>>()
+  );
 }
 
 macro_rules! integer_tests {
@@ -334,6 +377,51 @@ fn constants_in_const_context() {
   );
   assert_eq!(REJECTED, None, "127 needs 8 bits");
   assert_eq!(QUERIES, [true, false, false]);
+
+  // 1024 limbs, the most for which `typenum` has every number of limbs, in every limb type.
+  const MAX_8: Uint<U8192, [u8; 1024]> = Uint::<U8192, [u8; 1024]>::MAX;
+  const MAX_16: Uint<U16384, [u16; 1024]> = Uint::<U16384, [u16; 1024]>::MAX;
+  const MAX_32: Uint<U32768, [u32; 1024]> = Uint::<U32768, [u32; 1024]>::MAX;
+  const MAX_64: Uint<U65536, [u64; 1024]> = Uint::<U65536, [u64; 1024]>::MAX;
+  const MIN_8: Int<U8192, [u8; 1024]> = Int::<U8192, [u8; 1024]>::MIN;
+  const MIN_16: Int<U16384, [u16; 1024]> = Int::<U16384, [u16; 1024]>::MIN;
+  const MIN_32: Int<U32768, [u32; 1024]> = Int::<U32768, [u32; 1024]>::MIN;
+  const MIN_64: Int<U65536, [u64; 1024]> = Int::<U65536, [u64; 1024]>::MIN;
+  const MINUS_ONE_8: Option<Int<U8192, [u8; 1024]>> =
+    Int::<U8192, [u8; 1024]>::checked_from_limbs([u8::MAX; 1024]);
+  const MINUS_ONE_16: Option<Int<U16384, [u16; 1024]>> =
+    Int::<U16384, [u16; 1024]>::checked_from_limbs([u16::MAX; 1024]);
+  const MINUS_ONE_32: Option<Int<U32768, [u32; 1024]>> =
+    Int::<U32768, [u32; 1024]>::checked_from_limbs([u32::MAX; 1024]);
+  const MINUS_ONE_64: Option<Int<U65536, [u64; 1024]>> =
+    Int::<U65536, [u64; 1024]>::checked_from_limbs([u64::MAX; 1024]);
+  const WIDE_QUERIES: [bool; 8] = [
+    MAX_8.is_zero(),
+    MAX_16.is_zero(),
+    MAX_32.is_zero(),
+    MAX_64.is_zero(),
+    MIN_8.is_negative(),
+    MIN_16.is_negative(),
+    MIN_32.is_negative(),
+    MIN_64.is_negative(),
+  ];
+
+  assert_eq!(MAX_8.to_limbs(), [u8::MAX; 1024]);
+  assert_eq!(MAX_16.to_limbs(), [u16::MAX; 1024]);
+  assert_eq!(MAX_32.to_limbs(), [u32::MAX; 1024]);
+  assert_eq!(MAX_64.to_limbs(), [u64::MAX; 1024]);
+  assert_eq!(MIN_8.as_limbs()[1023], 1 << 7);
+  assert_eq!(MIN_16.as_limbs()[1023], 1 << 15);
+  assert_eq!(MIN_32.as_limbs()[1023], 1 << 31);
+  assert_eq!(MIN_64.as_limbs()[1023], 1 << 63);
+  assert!(MINUS_ONE_8.is_some_and(|value| value.is_negative()));
+  assert!(MINUS_ONE_16.is_some_and(|value| value.is_negative()));
+  assert!(MINUS_ONE_32.is_some_and(|value| value.is_negative()));
+  assert!(MINUS_ONE_64.is_some_and(|value| value.is_negative()));
+  assert_eq!(
+    WIDE_QUERIES,
+    [false, false, false, false, true, true, true, true]
+  );
 }
 
 #[test]
@@ -353,10 +441,16 @@ fn the_widest_aliases_format_every_digit() {
 
 #[test]
 fn the_largest_width_is_u32_max() {
-  // `2^32 - 1` bits in `2^26` limbs. Only constants of the type are used, so no value of half a
-  // gibibyte is made.
+  // `2^32 - 1` bits in `2^26` limbs of 64 bits, and in as many bytes in the other limb types. Only
+  // constants of the types are used, so no value of half a gibibyte is made.
   assert_eq!(Uint::<U4294967295, [u64; 67108864]>::BITS, u32::MAX);
   assert_eq!(Int::<U4294967295, [u64; 67108864]>::BITS, u32::MAX);
+  assert_eq!(Uint::<U4294967295, [u32; 134217728]>::BITS, u32::MAX);
+  assert_eq!(Int::<U4294967295, [u32; 134217728]>::BITS, u32::MAX);
+  assert_eq!(Uint::<U4294967295, [u16; 268435456]>::BITS, u32::MAX);
+  assert_eq!(Int::<U4294967295, [u16; 268435456]>::BITS, u32::MAX);
+  assert_eq!(Uint::<U4294967295, [u8; 536870912]>::BITS, u32::MAX);
+  assert_eq!(Int::<U4294967295, [u8; 536870912]>::BITS, u32::MAX);
 }
 
 /// The proptest configuration: the default, or under Miri a few cases from a fixed seed, written
@@ -374,16 +468,20 @@ fn config() -> ProptestConfig {
   }
 }
 
-/// Tests of one width against `num-bigint`. Each type is listed with its sign, `signed` or
-/// `unsigned`, its numbers of bits and limbs, and `full` when the bits fill the limbs.
+/// Tests of one width against `num-bigint`, after the limb type of the storages. Each type is
+/// listed with its sign, `signed` or `unsigned`, its numbers of bits and limbs, and `full` when the
+/// bits fill the limbs.
 macro_rules! width_tests {
-  ($(
+  ($limb:ident; $(
     $module:ident: $ty:ty, $sign:ident, $bits:literal, $limbs:literal $(, $full:ident)?
   );+ $(;)?) => {$(
     mod $module {
       use super::*;
 
       type T = $ty;
+
+      /// The type of a limb.
+      type Limb = $limb;
 
       const SIGNED: bool = width_tests!(@signed $sign);
       const BITS: u32 = $bits;
@@ -402,8 +500,8 @@ macro_rules! width_tests {
       }
 
       /// The limbs of `value`, in `LIMBS` limbs of two's complement for a signed type.
-      fn limbs_of(value: &BigInt) -> [u64; LIMBS] {
-        bigint::to_limbs(value, SIGNED).expect("the limbs hold the value")
+      fn limbs_of(value: &BigInt) -> [Limb; LIMBS] {
+        bigint::to_limbs_of(value, SIGNED).expect("the limbs hold the value")
       }
 
       /// The values at and next to zero, the limits, the limb boundaries and the sign bit.
@@ -419,7 +517,11 @@ macro_rules! width_tests {
           min.clone(),
           &min + 1u8,
         ];
-        for exp in [1, 62, 63, 64, 65, 127, 128, BITS.saturating_sub(2), BITS - 1] {
+        // The powers of two around the boundaries of 64-bit limbs and the sign bit, and then
+        // around the boundaries of the limbs of `Limb`.
+        let b = Limb::BITS;
+        let exps = [1, 62, 63, 64, 65, 127, 128, BITS.saturating_sub(2), BITS - 1];
+        for exp in exps.into_iter().chain([b - 1, b, b + 1, 2 * b - 1, 2 * b]) {
           let power = &one << exp;
           candidates.extend([&power - 1u8, power]);
         }
@@ -463,7 +565,7 @@ macro_rules! width_tests {
       )]
       fn checked_from_limbs_accepts_exactly_the_values() {
         let (min, max) = (min(), max());
-        for pattern in bigint::bit_patterns::<LIMBS>(&[BITS]) {
+        for pattern in bigint::bit_patterns_of::<Limb, LIMBS>(&[BITS]) {
           let value = bigint::from_limbs(&pattern, SIGNED);
           let checked = T::checked_from_limbs(pattern);
           assert_eq!(checked.is_some(), min <= value && value <= max, "{pattern:x?}");
@@ -483,13 +585,9 @@ macro_rules! width_tests {
         let values: Vec<(T, BigInt)> = values().into_iter().map(|value| (value, big(value))).collect();
         let state = RandomState::new();
         for &(a, ref big_a) in &values {
-          // One `write_u64` for each of the lowest `ceil(Bits / 64)` limbs, least significant
-          // first, and no length prefix.
-          let expected: Vec<Call> = a.to_limbs()[..BITS.div_ceil(64) as usize]
-            .iter()
-            .map(|&limb| Call::U64(limb))
-            .collect();
-          assert_eq!(recorded(&a), expected, "{a}");
+          // One `write_u64` for each of the lowest `ceil(Bits / 64)` 64-bit words, least
+          // significant first, and no length prefix. For `u64` limbs, the words are the limbs.
+          assert_eq!(recorded(&a), word_calls(big_a, BITS), "{a}");
           for &(b, ref big_b) in &values {
             assert_eq!(a == b, big_a == big_b);
             assert_eq!(a.cmp(&b), big_a.cmp(big_b), "{a} and {b}");
@@ -548,7 +646,7 @@ macro_rules! width_tests {
           all(miri, target_pointer_width = "32"),
           ignore = "Miri on 32-bit targets runs out of addresses in num-bigint allocations"
         )]
-        fn checked_from_limbs_matches_big_integers(limbs in any::<[u64; LIMBS]>()) {
+        fn checked_from_limbs_matches_big_integers(limbs in any::<[Limb; LIMBS]>()) {
           let value = bigint::from_limbs(&limbs, SIGNED);
           prop_assert_eq!(T::checked_from_limbs(limbs).is_some(), min() <= value && value <= max());
         }
@@ -561,8 +659,8 @@ macro_rules! width_tests {
           ignore = "Miri on 32-bit targets runs out of addresses in num-bigint allocations"
         )]
         fn checked_from_limbs_matches_big_integers_near_the_limits(
-          limbs in any::<[u64; LIMBS]>(),
-          width in 1..=64 * LIMBS as u32,
+          limbs in any::<[Limb; LIMBS]>(),
+          width in 1..=Limb::BITS * LIMBS as u32,
         ) {
           let modulus = BigInt::from(1u8) << width;
           let low = bigint::from_limbs(&limbs, false) % &modulus;
@@ -617,7 +715,7 @@ macro_rules! width_tests {
       ignore = "Miri on 32-bit targets runs out of addresses in num-bigint allocations"
     )]
     fn from_limbs_takes_every_pattern() {
-      for pattern in bigint::bit_patterns::<LIMBS>(&[BITS]) {
+      for pattern in bigint::bit_patterns_of::<Limb, LIMBS>(&[BITS]) {
         let value = T::from_limbs(pattern);
         assert_eq!(value.to_limbs(), pattern);
         assert_eq!(T::checked_from_limbs(pattern), Some(value));
@@ -626,7 +724,7 @@ macro_rules! width_tests {
   };
 }
 
-width_tests!(
+width_tests!(u64;
   // Widths that fill their limbs: every alias, and one and two limbs.
   uint_64_in_1: Uint<U64, [u64; 1]>, unsigned, 64, 1, full;
   uint_128_in_2: Uint<U128, [u64; 2]>, unsigned, 128, 2, full;
@@ -685,18 +783,101 @@ width_tests!(
   int_100_in_3: Int<U100, [u64; 3]>, signed, 100, 3;
 );
 
+/// The widths of the narrower limb types: widths that fill one limb, two limbs and 256 bits, widths
+/// that leave bits of the top limb unused, and a width that leaves a limb unused.
+mod u8_limbs {
+  use super::*;
+
+  width_tests!(u8;
+    uint_8_in_1: Uint<U8, [u8; 1]>, unsigned, 8, 1, full;
+    uint_16_in_2: Uint<U16, [u8; 2]>, unsigned, 16, 2, full;
+    uint_256_in_32: Uint<U256, [u8; 32]>, unsigned, 256, 32, full;
+    int_8_in_1: Int<U8, [u8; 1]>, signed, 8, 1, full;
+    int_16_in_2: Int<U16, [u8; 2]>, signed, 16, 2, full;
+    int_256_in_32: Int<U256, [u8; 32]>, signed, 256, 32, full;
+    uint_9_in_2: Uint<U9, [u8; 2]>, unsigned, 9, 2;
+    uint_100_in_13: Uint<U100, [u8; 13]>, unsigned, 100, 13;
+    int_1_in_1: Int<U1, [u8; 1]>, signed, 1, 1;
+    int_2_in_1: Int<U2, [u8; 1]>, signed, 2, 1;
+    int_7_in_1: Int<U7, [u8; 1]>, signed, 7, 1;
+    int_9_in_2: Int<U9, [u8; 2]>, signed, 9, 2;
+    int_100_in_13: Int<U100, [u8; 13]>, signed, 100, 13;
+    uint_8_in_2: Uint<U8, [u8; 2]>, unsigned, 8, 2;
+    int_8_in_2: Int<U8, [u8; 2]>, signed, 8, 2;
+  );
+}
+
+/// The widths of `u16` limbs, as for `u8` limbs.
+mod u16_limbs {
+  use super::*;
+
+  width_tests!(u16;
+    uint_16_in_1: Uint<U16, [u16; 1]>, unsigned, 16, 1, full;
+    uint_32_in_2: Uint<U32, [u16; 2]>, unsigned, 32, 2, full;
+    uint_256_in_16: Uint<U256, [u16; 16]>, unsigned, 256, 16, full;
+    int_16_in_1: Int<U16, [u16; 1]>, signed, 16, 1, full;
+    int_32_in_2: Int<U32, [u16; 2]>, signed, 32, 2, full;
+    int_256_in_16: Int<U256, [u16; 16]>, signed, 256, 16, full;
+    uint_17_in_2: Uint<U17, [u16; 2]>, unsigned, 17, 2;
+    uint_100_in_7: Uint<U100, [u16; 7]>, unsigned, 100, 7;
+    int_1_in_1: Int<U1, [u16; 1]>, signed, 1, 1;
+    int_2_in_1: Int<U2, [u16; 1]>, signed, 2, 1;
+    int_7_in_1: Int<U7, [u16; 1]>, signed, 7, 1;
+    int_17_in_2: Int<U17, [u16; 2]>, signed, 17, 2;
+    int_100_in_7: Int<U100, [u16; 7]>, signed, 100, 7;
+    uint_16_in_2: Uint<U16, [u16; 2]>, unsigned, 16, 2;
+    int_16_in_2: Int<U16, [u16; 2]>, signed, 16, 2;
+  );
+}
+
+/// The widths of `u32` limbs, as for `u8` limbs.
+mod u32_limbs {
+  use super::*;
+
+  width_tests!(u32;
+    uint_32_in_1: Uint<U32, [u32; 1]>, unsigned, 32, 1, full;
+    uint_64_in_2: Uint<U64, [u32; 2]>, unsigned, 64, 2, full;
+    uint_256_in_8: Uint<U256, [u32; 8]>, unsigned, 256, 8, full;
+    int_32_in_1: Int<U32, [u32; 1]>, signed, 32, 1, full;
+    int_64_in_2: Int<U64, [u32; 2]>, signed, 64, 2, full;
+    int_256_in_8: Int<U256, [u32; 8]>, signed, 256, 8, full;
+    uint_33_in_2: Uint<U33, [u32; 2]>, unsigned, 33, 2;
+    uint_100_in_4: Uint<U100, [u32; 4]>, unsigned, 100, 4;
+    int_1_in_1: Int<U1, [u32; 1]>, signed, 1, 1;
+    int_2_in_1: Int<U2, [u32; 1]>, signed, 2, 1;
+    int_7_in_1: Int<U7, [u32; 1]>, signed, 7, 1;
+    int_33_in_2: Int<U33, [u32; 2]>, signed, 33, 2;
+    int_100_in_4: Int<U100, [u32; 4]>, signed, 100, 4;
+    uint_32_in_2: Uint<U32, [u32; 2]>, unsigned, 32, 2;
+    int_32_in_2: Int<U32, [u32; 2]>, signed, 32, 2;
+  );
+}
+
 /// Asserts that `$narrow` and `$wide`, two storages of one width, make the same `Hash` calls for
 /// each of `$values`.
 macro_rules! assert_same_hash_calls {
   ($signed:literal, $narrow:ty, $wide:ty, $values:expr) => {
     for value in $values {
-      let narrow = <$narrow>::checked_from_limbs(bigint::to_limbs(&value, $signed).expect("fits"))
-        .expect("in range");
-      let wide = <$wide>::checked_from_limbs(bigint::to_limbs(&value, $signed).expect("fits"))
+      let narrow =
+        <$narrow>::checked_from_limbs(bigint::to_limbs_of(&value, $signed).expect("fits"))
+          .expect("in range");
+      let wide = <$wide>::checked_from_limbs(bigint::to_limbs_of(&value, $signed).expect("fits"))
         .expect("in range");
       assert_eq!(recorded(&narrow), recorded(&wide), "{value}");
     }
   };
+}
+
+/// The limits of `bits` bits, the values next to them, and the values next to zero.
+fn edges(bits: u32, signed: bool) -> Vec<BigInt> {
+  let (min, max) = (bigint::min(bits, signed), bigint::max(bits, signed));
+  let mut values = vec![BigInt::ZERO, BigInt::from(1u8), &max - 1u8, max.clone()];
+  if signed {
+    values.extend([BigInt::from(-1), &min + 1u8, min.clone()]);
+  }
+  // One signed bit holds only -1 and 0.
+  values.retain(|value| min <= *value && *value <= max);
+  values
 }
 
 #[test]
@@ -705,16 +886,6 @@ macro_rules! assert_same_hash_calls {
   ignore = "Miri on 32-bit targets runs out of addresses in num-bigint allocations"
 )]
 fn hash_calls_do_not_depend_on_the_number_of_limbs() {
-  // The limits of `bits` bits, the values next to them, and the values next to zero.
-  fn edges(bits: u32, signed: bool) -> Vec<BigInt> {
-    let (min, max) = (bigint::min(bits, signed), bigint::max(bits, signed));
-    let mut values = vec![BigInt::ZERO, BigInt::from(1u8), &max - 1u8, max];
-    if signed {
-      values.extend([BigInt::from(-1), &min + 1u8, min]);
-    }
-    values
-  }
-
   assert_same_hash_calls!(false, Uint<U1, [u64; 1]>, Uint<U1, [u64; 2]>, edges(1, false));
   assert_same_hash_calls!(false, Uint<U64, [u64; 1]>, Uint<U64, [u64; 2]>, edges(64, false));
   assert_same_hash_calls!(false, Uint<U100, [u64; 2]>, Uint<U100, [u64; 3]>, edges(100, false));
@@ -732,4 +903,223 @@ fn hash_calls_do_not_depend_on_the_number_of_limbs() {
     recorded(&minus_one),
     [Call::U64(u64::MAX), Call::U64(u64::MAX)]
   );
+}
+
+#[test]
+#[cfg_attr(
+  all(miri, target_pointer_width = "32"),
+  ignore = "Miri on 32-bit targets runs out of addresses in num-bigint allocations"
+)]
+fn hash_calls_do_not_depend_on_the_limb_type() {
+  // Storages of one byte, narrower than a word, and of bytes that end within a word.
+  assert_same_hash_calls!(false, Uint<U1, [u8; 1]>, Uint<U1, [u64; 1]>, edges(1, false));
+  assert_same_hash_calls!(false, Uint<U7, [u8; 1]>, Uint<U7, [u64; 1]>, edges(7, false));
+  assert_same_hash_calls!(false, Uint<U9, [u8; 2]>, Uint<U9, [u64; 1]>, edges(9, false));
+  assert_same_hash_calls!(false, Uint<U9, [u16; 1]>, Uint<U9, [u64; 1]>, edges(9, false));
+  assert_same_hash_calls!(false, Uint<U64, [u8; 8]>, Uint<U64, [u64; 1]>, edges(64, false));
+  assert_same_hash_calls!(false, Uint<U64, [u16; 4]>, Uint<U64, [u64; 1]>, edges(64, false));
+  assert_same_hash_calls!(false, Uint<U64, [u32; 2]>, Uint<U64, [u64; 1]>, edges(64, false));
+  assert_same_hash_calls!(false, Uint<U100, [u8; 13]>, Uint<U100, [u64; 2]>, edges(100, false));
+  assert_same_hash_calls!(false, Uint<U100, [u16; 7]>, Uint<U100, [u64; 2]>, edges(100, false));
+  assert_same_hash_calls!(false, Uint<U100, [u32; 4]>, Uint<U100, [u64; 2]>, edges(100, false));
+  assert_same_hash_calls!(false, Uint<U256, [u8; 32]>, u256, edges(256, false));
+  assert_same_hash_calls!(false, Uint<U256, [u16; 16]>, u256, edges(256, false));
+  assert_same_hash_calls!(false, Uint<U256, [u32; 8]>, u256, edges(256, false));
+  assert_same_hash_calls!(true, Int<U1, [u8; 1]>, Int<U1, [u64; 1]>, edges(1, true));
+  assert_same_hash_calls!(true, Int<U7, [u8; 1]>, Int<U7, [u64; 1]>, edges(7, true));
+  assert_same_hash_calls!(true, Int<U9, [u8; 2]>, Int<U9, [u64; 1]>, edges(9, true));
+  assert_same_hash_calls!(true, Int<U9, [u16; 1]>, Int<U9, [u64; 1]>, edges(9, true));
+  assert_same_hash_calls!(true, Int<U64, [u8; 8]>, Int<U64, [u64; 1]>, edges(64, true));
+  assert_same_hash_calls!(true, Int<U64, [u16; 4]>, Int<U64, [u64; 1]>, edges(64, true));
+  assert_same_hash_calls!(true, Int<U64, [u32; 2]>, Int<U64, [u64; 1]>, edges(64, true));
+  assert_same_hash_calls!(true, Int<U100, [u8; 13]>, Int<U100, [u64; 2]>, edges(100, true));
+  assert_same_hash_calls!(true, Int<U100, [u16; 7]>, Int<U100, [u64; 2]>, edges(100, true));
+  assert_same_hash_calls!(true, Int<U100, [u32; 4]>, Int<U100, [u64; 2]>, edges(100, true));
+  assert_same_hash_calls!(true, Int<U256, [u8; 32]>, i256, edges(256, true));
+  assert_same_hash_calls!(true, Int<U256, [u16; 16]>, i256, edges(256, true));
+  assert_same_hash_calls!(true, Int<U256, [u32; 8]>, i256, edges(256, true));
+
+  // A negative value writes copies of its sign bit for the limbs that a storage narrower than its
+  // words lacks.
+  let minus_one = Int::<U7, [u8; 1]>::checked_from_limbs([u8::MAX]).expect("-1");
+  assert_eq!(recorded(&minus_one), [Call::U64(u64::MAX)]);
+  let minus_one = Int::<U100, [u8; 13]>::checked_from_limbs([u8::MAX; 13]).expect("-1");
+  assert_eq!(
+    recorded(&minus_one),
+    [Call::U64(u64::MAX), Call::U64(u64::MAX)]
+  );
+  let max = Uint::<U100, [u16; 7]>::MAX;
+  assert_eq!(
+    recorded(&max),
+    [Call::U64(u64::MAX), Call::U64((1 << 36) - 1)]
+  );
+}
+
+/// A deterministic xorshift generator, so that a failure replays from the seed.
+struct Rng(u64);
+
+impl Rng {
+  fn next(&mut self) -> u64 {
+    self.0 ^= self.0 >> 12;
+    self.0 ^= self.0 << 25;
+    self.0 ^= self.0 >> 27;
+    self.0.wrapping_mul(0x2545_f491_4f6c_dd1d)
+  }
+
+  /// `N` words, each random, zero or all ones.
+  fn words<const N: usize>(&mut self) -> [u64; N] {
+    core::array::from_fn(|_| match self.next() % 4 {
+      0 => 0,
+      1 => u64::MAX,
+      _ => self.next(),
+    })
+  }
+}
+
+/// `words` in `M` limbs of type `L`, least significant first. Requires `M` limbs of `L` to have as
+/// many bits as `N` words.
+fn split<L: TryFrom<u64>, const N: usize, const M: usize>(words: &[u64; N]) -> [L; M] {
+  let per_word = M / N;
+  let limb_bits = 64 / per_word;
+  let mask = u64::MAX >> (64 - limb_bits);
+  core::array::from_fn(|i| {
+    let limb = words[i / per_word] >> (limb_bits * (i % per_word)) & mask;
+    L::try_from(limb).ok().expect("the limb fits")
+  })
+}
+
+/// The words of `limbs`, `M` limbs of type `L`, least significant first. Requires `M` limbs of
+/// `L` to have as many bits as `N` words.
+fn join<L: Copy + Into<u64>, const M: usize, const N: usize>(limbs: &[L; M]) -> [u64; N] {
+  let per_word = M / N;
+  let limb_bits = 64 / per_word;
+  core::array::from_fn(|i| {
+    (0..per_word).fold(0, |word, k| {
+      let limb: u64 = limbs[per_word * i + k].into();
+      word | limb << (limb_bits * k)
+    })
+  })
+}
+
+/// `words` with every bit at index `bits` or above cleared, or for a signed value set to bit
+/// `bits - 1`.
+fn truncate<const N: usize>(words: &[u64; N], bits: u32, signed: bool) -> [u64; N] {
+  let negative = signed && words[(bits as usize - 1) / 64] >> ((bits - 1) % 64) & 1 == 1;
+  core::array::from_fn(|i| {
+    let low = bits.saturating_sub(64 * i as u32).min(64);
+    let kept = if low == 64 { u64::MAX } else { (1 << low) - 1 };
+    match negative {
+      false => words[i] & kept,
+      true => words[i] | !kept,
+    }
+  })
+}
+
+/// Checks the same `Uint` or `Int` values in `[u64; N]`, `[u32; 2 * N]`, `[u16; 4 * N]` and
+/// `[u8; 8 * N]`: `$integer` is the type, and `$signed` whether it is `Int`.
+macro_rules! storages_agree {
+  ($integer:ident, $signed:tt, $bits:ty, $n:literal) => {{
+    type W = $integer<$bits, [u64; $n]>;
+    type N32 = $integer<$bits, [u32; 2 * $n]>;
+    type N16 = $integer<$bits, [u16; 4 * $n]>;
+    type N8 = $integer<$bits, [u8; 8 * $n]>;
+    let bits = <$bits>::U32;
+
+    // The limits in every storage, joined into words, are those of the 64-bit limbs.
+    assert_eq!(join(&N32::MAX.to_limbs()), W::MAX.to_limbs());
+    assert_eq!(join(&N16::MAX.to_limbs()), W::MAX.to_limbs());
+    assert_eq!(join(&N8::MAX.to_limbs()), W::MAX.to_limbs());
+    assert_eq!(join(&N32::MIN.to_limbs()), W::MIN.to_limbs());
+    assert_eq!(join(&N16::MIN.to_limbs()), W::MIN.to_limbs());
+    assert_eq!(join(&N8::MIN.to_limbs()), W::MIN.to_limbs());
+
+    let mut rng = Rng(0x5707_a9e5 ^ u64::from(bits) ^ u64::from($signed));
+    // Formatting thousands of bits in narrow limbs is slow under Miri.
+    let count = if cfg!(miri) { 2 } else if $n > 8 { 4 } else { 100 };
+    let format = $n <= 8 || !cfg!(miri);
+    let mut values: Vec<(W, N32, N16, N8)> = Vec::new();
+    for _ in 0..count {
+      // Random words, which hold a value of `bits` bits only now and then, and the value of
+      // `bits` bits in their low bits.
+      let raw = rng.words::<$n>();
+      let accepted = W::checked_from_limbs(raw).is_some();
+      assert_eq!(N32::checked_from_limbs(split(&raw)).is_some(), accepted);
+      assert_eq!(N16::checked_from_limbs(split(&raw)).is_some(), accepted);
+      assert_eq!(N8::checked_from_limbs(split(&raw)).is_some(), accepted);
+
+      let words = truncate(&raw, bits, $signed);
+      let wide = W::checked_from_limbs(words).expect("in range");
+      let n32 = N32::checked_from_limbs(split(&words)).expect("in range");
+      let n16 = N16::checked_from_limbs(split(&words)).expect("in range");
+      let n8 = N8::checked_from_limbs(split(&words)).expect("in range");
+      assert_eq!(join(&n32.to_limbs()), words);
+      assert_eq!(join(&n16.to_limbs()), words);
+      assert_eq!(join(&n8.to_limbs()), words);
+      storages_agree!(@queries $signed, wide, n32, n16, n8);
+      assert_eq!(recorded(&n32), recorded(&wide));
+      assert_eq!(recorded(&n16), recorded(&wide));
+      assert_eq!(recorded(&n8), recorded(&wide));
+      if format {
+        storages_agree!(@formats wide, n32, n16, n8);
+      }
+      values.push((wide, n32, n16, n8));
+    }
+    for &(wide, n32, n16, n8) in &values {
+      for &(other_wide, other_32, other_16, other_8) in &values {
+        let order = wide.cmp(&other_wide);
+        assert_eq!(n32.cmp(&other_32), order);
+        assert_eq!(n16.cmp(&other_16), order);
+        assert_eq!(n8.cmp(&other_8), order);
+        assert_eq!(n8 == other_8, wide == other_wide);
+      }
+    }
+  }};
+  (@formats $wide:ident, $($narrow:ident),+) => {
+    $(
+      assert_same_format!(
+        $narrow,
+        $wide,
+        "{}",
+        "{:120}",
+        "{:<120}",
+        "{:^121}",
+        "{:*>120}",
+        "{:+}",
+        "{:+0120}",
+        "{:<0120}",
+        "{:?}",
+        "{:>120?}",
+      );
+    )+
+  };
+  (@queries false, $wide:ident, $($narrow:ident),+) => {
+    $(assert_eq!($narrow.is_zero(), $wide.is_zero());)+
+  };
+  (@queries true, $wide:ident, $($narrow:ident),+) => {
+    $(
+      assert_eq!($narrow.is_zero(), $wide.is_zero());
+      assert_eq!($narrow.is_negative(), $wide.is_negative());
+      assert_eq!($narrow.is_positive(), $wide.is_positive());
+    )+
+  };
+}
+
+/// The same random values of widths that fill and that leave unused bits of `[u64; N]`, stored in
+/// every limb type: the text under each format, the order, the hash calls, the sign queries, the
+/// limits and the limbs that `checked_from_limbs` accepts do not depend on the limb type. Under
+/// Miri the widest values are not formatted.
+#[test]
+fn every_limb_type_holds_the_same_values() {
+  storages_agree!(Uint, false, U64, 1);
+  storages_agree!(Int, true, U64, 1);
+  storages_agree!(Uint, false, U7, 1);
+  storages_agree!(Int, true, U7, 1);
+  storages_agree!(Uint, false, U100, 2);
+  storages_agree!(Int, true, U100, 2);
+  storages_agree!(Uint, false, U256, 4);
+  storages_agree!(Int, true, U256, 4);
+  storages_agree!(Uint, false, U200, 4);
+  storages_agree!(Int, true, U200, 4);
+  storages_agree!(Uint, false, U4096, 64);
+  storages_agree!(Int, true, U4096, 64);
 }
