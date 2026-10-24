@@ -18,11 +18,11 @@ use crate::{
 /// The value runs from zero to `2^Bits - 1`. `Bits` is a [`typenum`] number of at least 1, and
 /// `Repr` is an array of limbs, least significant first, that holds at least `Bits` bits:
 /// `[u8; N]`, `[u16; N]`, `[u32; N]`, `[u64; N]` or `[u128; N]`, of `8 * N`, `16 * N`, `32 * N`,
-/// `64 * N` or `128 * N` bits. The bits above `Bits`, if any, are zero. `[u64; N]` is the fastest
-/// storage on 64-bit targets and the storage of the module [`aliases`](crate::aliases), which names
-/// common widths, such as [`u256`](crate::u256) for `Uint<U256, [u64; 4]>`; `[u32; N]` suits 32-bit
-/// targets, and `[u8; N]` has alignment 1 and holds the little-endian bytes of the value on every
-/// target. `[u128; N]` has the layout of an array of `u128`, for memory shared with code that
+/// `64 * N` or `128 * N` bits. The bits above `Bits`, if any, are zero. `[u64; N]` is the storage
+/// of the module [`aliases`](crate::aliases), which names common widths, such as
+/// [`u256`](crate::u256) for `Uint<U256, [u64; 4]>`; `[u32; N]` computes with native 64-bit
+/// intermediates, and `[u8; N]` has alignment 1 and holds the little-endian bytes of the value on
+/// every target. `[u128; N]` has the layout of an array of `u128`, for memory shared with code that
 /// stores 128-bit words. Its arithmetic works on the 64-bit halves of each limb, as no wider native
 /// integer exists; its speed relative to `[u64; N]` depends on the operation, the width and the
 /// target (formatting a value of a few limbs is several times slower), so choose it for layout, not

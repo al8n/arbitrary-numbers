@@ -140,15 +140,15 @@ fn main() -> Result<(), ParseError> {
 
 `Uint<Bits, Repr>` and `Int<Bits, Repr>` hold any width `Bits` in an array of limbs that has at
 least `Bits` bits, least significant limb first, in two's complement for `Int`: `[u64; N]`,
-`[u32; N]`, `[u16; N]`, `[u8; N]` or `[u128; N]`. `[u64; N]` is the fastest on 64-bit targets,
-`[u32; N]` suits 32-bit targets, and `[u8; N]` has alignment 1 and holds the little-endian bytes of
-the value on every target. `[u128; N]` has the layout of an array of `u128`, for memory shared with
-code that stores 128-bit words. Its arithmetic works on the 64-bit halves of each limb, as no wider
-native integer exists; its speed relative to `[u64; N]` depends on the operation, the width and the
-target (formatting a value of a few limbs is several times slower), so choose it for layout, not
-for speed. The aliases name the widths that fill 64-bit limbs: the wide storages above, and
-`u768`, `u1024`, `u2048` and `u4096` with their signed counterparts. Any other width or limb type
-is written out, such as `Uint<U200, [u64; 4]>` or `Uint<U24, [u8; 3]>`.
+`[u32; N]`, `[u16; N]`, `[u8; N]` or `[u128; N]`. `[u64; N]` is the storage of the aliases,
+`[u32; N]` computes with native 64-bit intermediates, and `[u8; N]` has alignment 1 and holds the
+little-endian bytes of the value on every target. `[u128; N]` has the layout of an array of `u128`,
+for memory shared with code that stores 128-bit words. Its arithmetic works on the 64-bit halves of
+each limb, as no wider native integer exists; its speed relative to `[u64; N]` depends on the
+operation, the width and the target (formatting a value of a few limbs is several times slower), so
+choose it for layout, not for speed. The aliases name the widths that fill 64-bit limbs: the wide
+storages above, and `u768`, `u1024`, `u2048` and `u4096` with their signed counterparts. Any other
+width or limb type is written out, such as `Uint<U200, [u64; 4]>` or `Uint<U24, [u8; 3]>`.
 
 - `const` items and methods: `BITS`, `ZERO`, `MIN` and `MAX`; `from_limbs` for a width that fills
   its limbs, and `checked_from_limbs` for any width, which returns `None` unless the limbs hold a
