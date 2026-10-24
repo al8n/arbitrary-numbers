@@ -1,4 +1,4 @@
-use crate::int::limb_layer::tests::{limb_layer_tests, narrow_limb_tests, native_oracle};
+use crate::int::limb_layer::tests::{limb_layer_tests, native_oracle, other_limb_tests};
 
 // The tests that every instance shares, with their helpers and the imports that the tests below
 // use as well.
@@ -6,7 +6,7 @@ limb_layer_tests!(unsigned);
 
 // The helpers of the tests below, which compare the layer with native integers and with the layer
 // for `[u64; N]`.
-narrow_limb_tests!(unsigned);
+other_limb_tests!(unsigned);
 
 native_oracle!(unsigned one_limb_matches_u16, u16, 1);
 native_oracle!(unsigned two_limbs_match_u32, u32, 2);
