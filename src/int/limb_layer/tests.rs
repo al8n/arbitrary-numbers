@@ -3,10 +3,11 @@
 //! `limb_layer_tests!` writes them once, in terms of the instance's `Limb` and its number of bits
 //! `B`, into the `tests` module of each instance, so that every test keeps the path of its
 //! instance. The inputs depend on the limb type only through `B`: the `N`, the seeds and the order
-//! of the random draws are the same for every instance. Each instance adds the tests that compare
-//! it with native integers, whose widths differ from one limb type to another.
+//! of the random draws are the same for every instance, except that a random limb of more than 64
+//! bits takes two draws. Each instance adds the tests that compare it with native integers, whose
+//! widths differ from one limb type to another.
 //!
-//! The instances for limbs narrower than `u64` share those tests as well: `narrow_limb_tests!`
+//! The instances for the limb types other than `u64` share those tests as well: `other_limb_tests!`
 //! writes their helpers, and `native_oracle!` writes each test against a native integer.
 
 /// Defines, in the `tests` module of an instance of `limb_layer!`, the tests that every instance
@@ -194,9 +195,16 @@ macro_rules! limb_layer_tests {
 
     fn digits_of_the_limits<const N: usize>() {
       for value in [[0; N], [Limb::MAX; N], boundary::<N>(N - 1)] {
-        let mut buf = [0xff; DIGIT_BUF_LEN];
-        let start = write_digits(&value, &mut buf);
         let expected = bigint::from_limbs(&value, false).to_string();
+        // `write_digits` requires at most 512 bits, whose digits fit `DIGIT_BUF_LEN` bytes, and
+        // `DIGITS_PER_LIMB * N` bytes hold the digits of any `N` limbs.
+        if B as usize * N <= 512 {
+          let mut buf = [0xff; DIGIT_BUF_LEN];
+          let start = write_digits(&value, &mut buf);
+          assert_eq!(&buf[start..], expected.as_bytes());
+        }
+        let mut buf = vec![0xff; DIGITS_PER_LIMB * N];
+        let start = write_digits_into(&value, &mut buf);
         assert_eq!(&buf[start..], expected.as_bytes());
 
         // The digits read back, also with separators among them.
@@ -255,6 +263,15 @@ macro_rules! limb_layer_tests {
         self.0.wrapping_mul(0x2545_f491_4f6c_dd1d)
       }
 
+      /// A random limb: one draw, or two for a limb of more than 64 bits, the high half first.
+      fn limb(&mut self) -> Limb {
+        if B > 64 {
+          ((self.next() as u128) << 64 | self.next() as u128) as Limb
+        } else {
+          self.next() as Limb
+        }
+      }
+
       /// A nonzero value with a random number of significant limbs, each random, zero or all
       /// ones, and a top limb of random bit length, which gives every normalization shift.
       fn limbs<const N: usize>(&mut self) -> [Limb; N] {
@@ -264,7 +281,7 @@ macro_rules! limb_layer_tests {
           *limb = match self.next() % 4 {
             0 => 0,
             1 => Limb::MAX,
-            _ => self.next() as Limb,
+            _ => self.limb(),
           };
         }
         value[count - 1] = (value[count - 1] >> (self.next() % u64::from(B))).max(1);
@@ -503,6 +520,11 @@ macro_rules! limb_layer_tests {
     }
 
     fn widths_against_big_integers<const N: usize>() {
+      // Above 4096 bits, which only limbs of more than 64 bits reach here, the values take no
+      // path that narrower ones do not, and the time grows faster than the width.
+      if B as usize * N > 4096 {
+        return;
+      }
       let widths = widths::<N>();
       let patterns = bigint::bit_patterns_of::<Limb, N>(&widths);
       let values: Vec<BigInt> = patterns
@@ -539,6 +561,11 @@ macro_rules! limb_layer_tests {
     }
 
     fn digits_into_a_slice<const N: usize>() {
+      // Above 4096 bits, which only limbs of more than 64 bits reach here, the values take no
+      // path that narrower ones do not, and the time grows faster than the width.
+      if B as usize * N > 4096 {
+        return;
+      }
       let mut patterns = vec![[0; N], [Limb::MAX; N]];
       // Each limb boundary, or under Miri, which divides many limbs slowly, only the top one.
       let boundaries = if cfg!(miri) { N - 1..N } else { 0..N };
@@ -699,9 +726,16 @@ macro_rules! limb_layer_tests {
 
     fn digits_of_min_and_max<const N: usize>() {
       for value in [min::<N>(), max::<N>(), [Limb::MAX; N], [0; N]] {
-        let mut buf = [0xff; DIGIT_BUF_LEN];
-        let start = write_digits(&value, &mut buf);
         let expected = bigint::from_limbs(&value, true).magnitude().to_string();
+        // `write_digits` requires at most 512 bits, whose digits fit `DIGIT_BUF_LEN` bytes, and
+        // `DIGITS_PER_LIMB * N` bytes hold the digits of any `N` limbs.
+        if B as usize * N <= 512 {
+          let mut buf = [0xff; DIGIT_BUF_LEN];
+          let start = write_digits(&value, &mut buf);
+          assert_eq!(&buf[start..], expected.as_bytes());
+        }
+        let mut buf = vec![0xff; crate::int::$unsigned::DIGITS_PER_LIMB * N];
+        let start = crate::int::$unsigned::write_digits_into(&unsigned_abs(&value), &mut buf);
         assert_eq!(&buf[start..], expected.as_bytes());
       }
     }
@@ -812,12 +846,21 @@ macro_rules! limb_layer_tests {
         self.0.wrapping_mul(0x2545_f491_4f6c_dd1d)
       }
 
+      /// A random limb: one draw, or two for a limb of more than 64 bits, the high half first.
+      fn limb(&mut self) -> Limb {
+        if B > 64 {
+          ((self.next() as u128) << 64 | self.next() as u128) as Limb
+        } else {
+          self.next() as Limb
+        }
+      }
+
       /// A value of either sign whose magnitude has a random number of significant limbs.
       fn signed<const N: usize>(&mut self) -> [Limb; N] {
         let mut magnitude = [0; N];
         let count = (self.next() % N as u64) as usize + 1;
         for limb in &mut magnitude[..count] {
-          *limb = self.next() as Limb;
+          *limb = self.limb();
         }
         magnitude[count - 1] >>= self.next() % u64::from(B);
         magnitude[N - 1] &= Limb::MAX >> 1;
@@ -915,6 +958,11 @@ macro_rules! limb_layer_tests {
     }
 
     fn widths_against_big_integers<const N: usize>() {
+      // Above 4096 bits, which only limbs of more than 64 bits reach here, the values take no
+      // path that narrower ones do not, and the time grows faster than the width.
+      if B as usize * N > 4096 {
+        return;
+      }
       let widths = widths::<N>();
       let patterns = bigint::bit_patterns_of::<Limb, N>(&widths);
       let values: Vec<(BigInt, BigInt)> = patterns
@@ -1010,12 +1058,12 @@ macro_rules! limb_layer_tests {
 
 pub(crate) use limb_layer_tests;
 
-/// Defines, in the `tests` module of an instance of `limb_layer!` for a limb type narrower than
-/// `u64`, after `limb_layer_tests!`, the helpers of the tests that compare the instance with native
-/// integers and with the layer for `[u64; N]`: `narrow_limb_tests!(unsigned)` for a lower layer,
-/// and `narrow_limb_tests!(signed)` for an upper layer. The samples depend on the limb type only
+/// Defines, in the `tests` module of an instance of `limb_layer!` for a limb type other than `u64`,
+/// after `limb_layer_tests!`, the helpers of the tests that compare the instance with native
+/// integers and with the layer for `[u64; N]`: `other_limb_tests!(unsigned)` for a lower layer,
+/// and `other_limb_tests!(signed)` for an upper layer. The samples depend on the limb type only
 /// through `B`.
-macro_rules! narrow_limb_tests {
+macro_rules! other_limb_tests {
   (unsigned) => {
     /// Values around zero, the limb boundaries, the powers of ten and the limit of `u128`.
     fn samples() -> Vec<u128> {
@@ -1048,90 +1096,114 @@ macro_rules! narrow_limb_tests {
       core::array::from_fn(|i| (value >> (B as usize * i)) as Limb)
     }
 
-    /// Joins each run of `64 / B` limbs into a `u64` limb, the low one first. Requires
-    /// `M == 64 / B * N`.
-    const fn join<const M: usize, const N: usize>(value: &[Limb; M]) -> [u64; N] {
-      let per_word = (u64::BITS / B) as usize;
-      let mut joined = [0; N];
+    /// The integer in `value` in `N` limbs of 64 bits, least significant first: each run of
+    /// `64 / B` limbs joined into one, or each limb of 128 bits split into two, the low half
+    /// first. Requires `B * M == 64 * N`.
+    const fn to_u64_limbs<const M: usize, const N: usize>(value: &[Limb; M]) -> [u64; N] {
+      const { assert!(B as usize * M == 64 * N) };
+      // Both arrays hold the integer in the same little-endian bytes.
+      let mut bytes = [[0; 8]; N];
+      let flat = bytes.as_flattened_mut();
       let mut i = 0;
-      while i < N {
+      while i < M {
+        let limb = value[i].to_le_bytes();
         let mut k = 0;
-        while k < per_word {
-          joined[i] |= (value[per_word * i + k] as u64) << (B as usize * k);
+        while k < limb.len() {
+          flat[limb.len() * i + k] = limb[k];
           k += 1;
         }
         i += 1;
       }
-      joined
+      let mut words = [0; N];
+      let mut i = 0;
+      while i < N {
+        words[i] = u64::from_le_bytes(bytes[i]);
+        i += 1;
+      }
+      words
     }
 
     /// Checks the layer for `[Limb; M]` against the layer for `[u64; N]`, which holds the same
-    /// integers in `64 / B` times fewer limbs. It allocates nothing, so that it also runs on 32-bit
-    /// Miri, where the tests against `num-bigint` run out of addresses.
+    /// integers in limbs of 64 bits. It allocates nothing, so that it also runs on 32-bit Miri,
+    /// where the tests against `num-bigint` run out of addresses.
     fn matches_the_u64_layer<const M: usize, const N: usize>() {
       use crate::int::limbs;
 
-      const { assert!(M == (u64::BITS / B) as usize * N) };
+      const { assert!(B as usize * M == 64 * N) };
       let mut rng = Rng(0x5eed_3264 ^ N as u64);
       let count = if cfg!(miri) { 16 } else { 2000 };
       for _ in 0..count {
         // Nonzero values, whose limbs have every normalization shift of a limb.
         let (a, b) = (rng.limbs::<M>(), rng.limbs::<M>());
-        let (wide_a, wide_b): ([u64; N], [u64; N]) = (join(&a), join(&b));
+        let (wide_a, wide_b): ([u64; N], [u64; N]) = (to_u64_limbs(&a), to_u64_limbs(&b));
         assert_eq!(cmp(&a, &b), limbs::cmp(&wide_a, &wide_b));
         assert_eq!(le(&a, &b), limbs::le(&wide_a, &wide_b));
         let (sum, carry) = overflowing_add(&a, &b);
         assert_eq!(
-          (join(&sum), carry),
+          (to_u64_limbs(&sum), carry),
           limbs::overflowing_add(&wide_a, &wide_b)
         );
         let (difference, borrow) = overflowing_sub(&a, &b);
         assert_eq!(
-          (join(&difference), borrow),
+          (to_u64_limbs(&difference), borrow),
           limbs::overflowing_sub(&wide_a, &wide_b)
         );
         let (quotient, remainder) = div_rem(&a, &b);
         assert_eq!(
-          (join(&quotient), join(&remainder)),
+          (to_u64_limbs(&quotient), to_u64_limbs(&remainder)),
           limbs::div_rem(&wide_a, &wide_b),
           "{a:x?} / {b:x?}"
         );
         for mode in bigint::MODES {
           let (rounded, remainder, away) = round_div(&a, &b, mode);
           assert_eq!(
-            (join(&rounded), join(&remainder), away),
+            (to_u64_limbs(&rounded), to_u64_limbs(&remainder), away),
             limbs::round_div(&wide_a, &wide_b, mode)
           );
         }
 
-        // The low halves, whose product is representable.
-        let (mut low_a, mut low_b) = (a, b);
-        low_a[M / 2..].fill(0);
-        low_b[M / 2..].fill(0);
-        let (wide_low_a, wide_low_b): ([u64; N], [u64; N]) = (join(&low_a), join(&low_b));
+        // The low `B * M / 2` bits, whose product is representable: the low half of the limbs,
+        // or for an odd `M`, also the low half of the middle limb.
+        let half = B as usize * M / 2;
+        let low = |value: &[Limb; M]| -> [Limb; M] {
+          core::array::from_fn(|i| match half.saturating_sub(B as usize * i) {
+            0 => 0,
+            kept if kept >= B as usize => value[i],
+            kept => value[i] & (Limb::MAX >> (B as usize - kept)),
+          })
+        };
+        let (low_a, low_b) = (low(&a), low(&b));
+        let (wide_low_a, wide_low_b): ([u64; N], [u64; N]) =
+          (to_u64_limbs(&low_a), to_u64_limbs(&low_b));
         assert_eq!(
-          join(&mul(&low_a, &low_b)),
+          to_u64_limbs(&mul(&low_a, &low_b)),
           limbs::mul(&wide_low_a, &wide_low_b)
         );
 
         let exp = (rng.next() % (20 * N as u64 + 2)) as u32;
         let product = checked_mul_pow10(&a, exp);
         assert_eq!(
-          product.map(|product| join(&product)),
+          product.map(|product| to_u64_limbs(&product)),
           limbs::checked_mul_pow10(&wide_a, exp)
         );
         if product.is_some() {
-          assert_eq!(join(&mul_pow10(&a, exp)), limbs::mul_pow10(&wide_a, exp));
+          assert_eq!(
+            to_u64_limbs(&mul_pow10(&a, exp)),
+            limbs::mul_pow10(&wide_a, exp)
+          );
         }
         let (quotient, remainder) = div_rem_pow10(&a, exp);
         assert_eq!(
-          (join(&quotient), join(&remainder)),
+          (to_u64_limbs(&quotient), to_u64_limbs(&remainder)),
           limbs::div_rem_pow10(&wide_a, exp)
         );
 
         let bits = (rng.next() % (64 * N as u64 + 1)) as u32;
         assert_eq!(fits_bits(&a, bits), limbs::fits_bits(&wide_a, bits));
-        assert_eq!(join(&max_of_bits::<M>(bits)), limbs::max_of_bits::<N>(bits));
+        assert_eq!(
+          to_u64_limbs(&max_of_bits::<M>(bits)),
+          limbs::max_of_bits::<N>(bits)
+        );
 
         // The digits agree and read back. Both layers need `20 * N` bytes at most.
         let (mut buf, mut wide_buf) = ([0; 160], [0; 160]);
@@ -1157,8 +1229,8 @@ macro_rules! narrow_limb_tests {
         i128::MIN + 1,
       ];
       // `2^(B * k - 1)` and `2^(B * k)` for each `k` from 1 below `128 / B`.
-      for k in 1..128 / B {
-        for boundary in [1i128 << (B * k - 1), 1 << (B * k)] {
+      for shift in (1..128 / B).map(|k| B * k) {
+        for boundary in [1i128 << (shift - 1), 1 << shift] {
           values.extend([boundary - 1, boundary, boundary + 1]);
           values.extend([1 - boundary, -boundary, -boundary - 1]);
         }
@@ -1196,12 +1268,12 @@ macro_rules! narrow_limb_tests {
   };
 }
 
-pub(crate) use narrow_limb_tests;
+pub(crate) use other_limb_tests;
 
 /// Defines a test that compares `N` limbs with the native integer of `B * N` bits:
 /// `native_oracle!(unsigned name, native, N)` in the `tests` module of a lower layer, and
 /// `native_oracle!(signed name, native, N)` in that of an upper layer, after
-/// `narrow_limb_tests!`.
+/// `other_limb_tests!`.
 macro_rules! native_oracle {
   (unsigned $name:ident, $native:ident, $n:literal) => {
     #[test]

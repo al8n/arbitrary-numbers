@@ -5,7 +5,7 @@ error[E0277]: `Bits` does not fill the storage
   |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `Bits` is less than the bits of the storage
   |
   = help: the trait `numo::width::sealed::ReprFilled` is not implemented for `B0`
-  = note: `[u8; N]`, `[u16; N]`, `[u32; N]` and `[u64; N]` hold `8 * N`, `16 * N`, `32 * N` and `64 * N` bits
+  = note: `[u8; N]`, `[u16; N]`, `[u32; N]`, `[u64; N]` and `[u128; N]` hold `8 * N`, `16 * N`, `32 * N`, `64 * N` and `128 * N` bits
   = note: `checked_from_limbs` takes the limbs of any width that fits and checks the value
 help: the trait `numo::width::sealed::ReprFilled` is implemented for `B1`
  --> src/width.rs
@@ -39,7 +39,7 @@ error[E0277]: `Bits` does not fill the storage
   |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `Bits` is less than the bits of the storage
   |
   = help: the trait `numo::width::sealed::ReprFilled` is not implemented for `B0`
-  = note: `[u8; N]`, `[u16; N]`, `[u32; N]` and `[u64; N]` hold `8 * N`, `16 * N`, `32 * N` and `64 * N` bits
+  = note: `[u8; N]`, `[u16; N]`, `[u32; N]`, `[u64; N]` and `[u128; N]` hold `8 * N`, `16 * N`, `32 * N`, `64 * N` and `128 * N` bits
   = note: `checked_from_limbs` takes the limbs of any width that fits and checks the value
 help: the trait `numo::width::sealed::ReprFilled` is implemented for `B1`
  --> src/width.rs

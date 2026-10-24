@@ -1,0 +1,50 @@
+error[E0277]: the storage cannot hold `Bits` bits
+ --> tests/ui/u128_limb_widths.rs:8:34
+  |
+8 |   let _: Uint<U257, [u128; 2]> = Default::default();
+  |                                  ^^^^^^^^^^^^^^^^^^ `Bits` is greater than the bits of the storage
+  |
+  = help: the trait `numo::width::sealed::BitsFit` is not implemented for `B0`
+  = note: `[u8; N]`, `[u16; N]`, `[u32; N]`, `[u64; N]` and `[u128; N]` hold `8 * N`, `16 * N`, `32 * N`, `64 * N` and `128 * N` bits
+help: the trait `numo::width::sealed::BitsFit` is implemented for `B1`
+ --> src/width.rs
+  |
+  |   impl BitsFit for typenum::B1 {}
+  |   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  = note: required for `UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UTerm, B1>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B1>` to implement `numo::width::sealed::SealedFitsBits<[u128; 2]>`
+  = note: required for `UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UTerm, B1>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B1>` to implement `FitsBits<[u128; 2]>`
+  = note: required for `Uint<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UTerm, B1>, B0>, B0>, B0>, B0>, B0>, B0>, B0>, B1>, [u128; 2]>` to implement `Default`
+
+error[E0277]: `Bits` does not fill the storage
+  --> tests/ui/u128_limb_widths.rs:10:16
+   |
+10 |   let _value = Uint::<U200, [u128; 2]>::from_limbs([0; 2]);
+   |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `Bits` is less than the bits of the storage
+   |
+   = help: the trait `numo::width::sealed::ReprFilled` is not implemented for `B0`
+   = note: `[u8; N]`, `[u16; N]`, `[u32; N]`, `[u64; N]` and `[u128; N]` hold `8 * N`, `16 * N`, `32 * N`, `64 * N` and `128 * N` bits
+   = note: `checked_from_limbs` takes the limbs of any width that fits and checks the value
+help: the trait `numo::width::sealed::ReprFilled` is implemented for `B1`
+  --> src/width.rs
+   |
+   |   impl ReprFilled for typenum::B1 {}
+   |   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = note: required for `UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UTerm, B1>, B1>, B0>, B0>, B1>, B0>, B0>, B0>` to implement `numo::width::sealed::SealedFillsRepr<[u128; 2]>`
+   = note: required for `UInt<UInt<UInt<UInt<UInt<UInt<UInt<UInt<UTerm, B1>, B1>, B0>, B0>, B1>, B0>, B0>, B0>` to implement `FillsRepr<[u128; 2]>`
+note: required by a bound in `Uint::<B, [u128; N]>::from_limbs`
+  --> src/integer.rs
+   |
+   |         pub const fn from_limbs(limbs: [$limb; N]) -> Self
+   |                      ---------- required by a bound in this associated function
+   |         where
+   |           B: FillsRepr<[$limb; N]>,
+   |              ^^^^^^^^^^^^^^^^^^^^^ required by this bound in `Uint::<B, [u128; N]>::from_limbs`
+...
+   | / array_integers! {
+   | |   u128, 128, limbs128, signed_limbs128;
+   | |   Uint: {
+   | |     /// ```
+...  |
+   | | }
+   | |_- in this macro invocation
+   = note: this error originates in the macro `array_integers` (in Nightly builds, run with -Z macro-backtrace for more info)

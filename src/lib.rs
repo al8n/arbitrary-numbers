@@ -76,12 +76,16 @@
 //!
 //! [`Uint<Bits, Repr>`](Uint) and [`Int<Bits, Repr>`](Int) are integers of `Bits` bits, unsigned
 //! and in two's complement, stored in an array of limbs, least significant first, that holds at
-//! least `Bits` bits: `[u64; N]`, `[u32; N]`, `[u16; N]` or `[u8; N]`. `[u64; N]` is the fastest
-//! storage on 64-bit targets, `[u32; N]` suits 32-bit targets, and `[u8; N]` has alignment 1 and
-//! holds the little-endian bytes of the value on every target. The module [`aliases`] names the
-//! widths of the wide storages above and 768, 1024, 2048 and 4096 bits in 64-bit limbs, each of
-//! which fills its limbs; any other width or limb type is written out, such as
-//! `Uint<U200, [u64; 4]>` or `Uint<U24, [u8; 3]>`. [`FitsBits`] relates a width to the storages
+//! least `Bits` bits: `[u64; N]`, `[u32; N]`, `[u16; N]`, `[u8; N]` or `[u128; N]`. `[u64; N]` is
+//! the storage of the aliases, `[u32; N]` computes with native 64-bit intermediates, and `[u8; N]`
+//! has alignment 1 and holds the little-endian bytes of the value on every target. `[u128; N]` has
+//! the layout of an array of `u128`, for memory shared with code that stores 128-bit words. Its
+//! arithmetic works on the 64-bit halves of each limb, as no wider native integer exists; its speed
+//! relative to `[u64; N]` depends on the operation, the width and the target (formatting a value of
+//! a few limbs is several times slower), so choose it for layout, not for speed. The module
+//! [`aliases`] names the widths of the wide storages above and 768, 1024, 2048 and 4096 bits in
+//! 64-bit limbs, each of which fills its limbs; any other width or limb type is written out, such
+//! as `Uint<U200, [u64; 4]>` or `Uint<U24, [u8; 3]>`. [`FitsBits`] relates a width to the storages
 //! that hold it, and [`FillsRepr`] to the storages that it fills.
 //!
 //! Each type has the constants `BITS`, `ZERO`, `MIN` and `MAX`. Its `const fn` constructors are

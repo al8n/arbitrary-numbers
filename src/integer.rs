@@ -17,12 +17,16 @@ use crate::{
 ///
 /// The value runs from zero to `2^Bits - 1`. `Bits` is a [`typenum`] number of at least 1, and
 /// `Repr` is an array of limbs, least significant first, that holds at least `Bits` bits:
-/// `[u8; N]`, `[u16; N]`, `[u32; N]` or `[u64; N]`, of `8 * N`, `16 * N`, `32 * N` or `64 * N`
-/// bits. The bits above `Bits`, if any, are zero. `[u64; N]` is the fastest storage on 64-bit
-/// targets and the storage of the module [`aliases`](crate::aliases), which names common widths,
-/// such as [`u256`](crate::u256) for `Uint<U256, [u64; 4]>`; `[u32; N]` suits 32-bit targets, and
-/// `[u8; N]` has alignment 1 and holds the little-endian bytes of the value on every target. The
-/// type has the size, alignment and ABI of `Repr`.
+/// `[u8; N]`, `[u16; N]`, `[u32; N]`, `[u64; N]` or `[u128; N]`, of `8 * N`, `16 * N`, `32 * N`,
+/// `64 * N` or `128 * N` bits. The bits above `Bits`, if any, are zero. `[u64; N]` is the storage
+/// of the module [`aliases`](crate::aliases), which names common widths, such as
+/// [`u256`](crate::u256) for `Uint<U256, [u64; 4]>`; `[u32; N]` computes with native 64-bit
+/// intermediates, and `[u8; N]` has alignment 1 and holds the little-endian bytes of the value on
+/// every target. `[u128; N]` has the layout of an array of `u128`, for memory shared with code that
+/// stores 128-bit words. Its arithmetic works on the 64-bit halves of each limb, as no wider native
+/// integer exists; its speed relative to `[u64; N]` depends on the operation, the width and the
+/// target (formatting a value of a few limbs is several times slower), so choose it for layout, not
+/// for speed. The type has the size, alignment and ABI of `Repr`.
 ///
 /// [`from_limbs`](Self::from_limbs) creates a value from any bit pattern of a width that fills its
 /// limbs, and [`checked_from_limbs`](Self::checked_from_limbs) from the limbs of any width, checking
@@ -82,10 +86,11 @@ pub struct Uint<Bits, Repr> {
 ///
 /// The value runs from `-2^(Bits - 1)` to `2^(Bits - 1) - 1`. `Bits` is a [`typenum`] number of at
 /// least 1, and `Repr` is an array of limbs, least significant first, that holds at least `Bits`
-/// bits, as for [`Uint`]: `[u8; N]`, `[u16; N]`, `[u32; N]` or `[u64; N]`. The bits above `Bits`, if
-/// any, are copies of the sign bit, so the limbs hold the value in two's complement. The module
-/// [`aliases`](crate::aliases) names common widths in `[u64; N]`, such as [`i256`](crate::i256) for
-/// `Int<U256, [u64; 4]>`. The type has the size, alignment and ABI of `Repr`.
+/// bits, as for [`Uint`]: `[u8; N]`, `[u16; N]`, `[u32; N]`, `[u64; N]` or `[u128; N]`. The bits
+/// above `Bits`, if any, are copies of the sign bit, so the limbs hold the value in two's
+/// complement. The module [`aliases`](crate::aliases) names common widths in `[u64; N]`, such as
+/// [`i256`](crate::i256) for `Int<U256, [u64; 4]>`. The type has the size, alignment and ABI of
+/// `Repr`.
 ///
 /// As for [`Uint`], [`from_limbs`](Self::from_limbs) creates a value from any bit pattern of a width
 /// that fills its limbs, and [`checked_from_limbs`](Self::checked_from_limbs) from the limbs of any
@@ -495,6 +500,39 @@ array_integers! {
   }
 }
 
+array_integers! {
+  u128, 128, limbs128, signed_limbs128;
+  Uint: {
+    /// ```
+    /// use numo::{Uint, typenum::U129};
+    ///
+    /// type U129x2 = Uint<U129, [u128; 2]>;
+    ///
+    /// // 2^128 + 1 and 2^129 - 1 have 129 bits, and 2^129 has 130.
+    /// assert_eq!(
+    ///   U129x2::checked_from_limbs([1, 1]).unwrap().to_string(),
+    ///   "340282366920938463463374607431768211457"
+    /// );
+    /// assert_eq!(U129x2::checked_from_limbs([u128::MAX, 1]), Some(U129x2::MAX));
+    /// assert_eq!(U129x2::checked_from_limbs([0, 2]), None);
+    /// ```
+  }
+  Int: {
+    /// ```
+    /// use numo::{Int, typenum::U7};
+    ///
+    /// type I7 = Int<U7, [u128; 1]>;
+    ///
+    /// // -1, every bit set, and 63, the largest value.
+    /// assert!(I7::checked_from_limbs([u128::MAX]).unwrap().is_negative());
+    /// assert_eq!(I7::checked_from_limbs([63]), Some(I7::MAX));
+    /// // 127 and -65 need 8 bits.
+    /// assert_eq!(I7::checked_from_limbs([127]), None);
+    /// assert_eq!(I7::checked_from_limbs([-65i128 as u128]), None);
+    /// ```
+  }
+}
+
 // Trait methods cannot be `const`.
 macro_rules! integer_traits {
   ($name:ident, $repr:ident) => {
@@ -564,8 +602,8 @@ macro_rules! integer_traits {
     {
       /// Writes the value in decimal, honoring width, fill, alignment, `+` and `0` as integers do.
       ///
-      /// The digits take a stack buffer of `3 * N`, `5 * N`, `10 * N` or `20 * N` bytes for limbs
-      /// of 8, 16, 32 or 64 bits, and time quadratic in `N`.
+      /// The digits take a stack buffer of `3 * N`, `5 * N`, `10 * N`, `20 * N` or `39 * N` bytes
+      /// for limbs of 8, 16, 32, 64 or 128 bits, and time quadratic in `N`.
       #[inline]
       fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.repr.fmt_decimal(f, Token::new())
