@@ -281,21 +281,31 @@ array_storage!(
 );
 
 /// Writes the lowest `ceil(bits / 64)` 64-bit words of the integer in `limbs` to `state`, least
-/// significant first, without the length prefix of a slice. Each word joins `64 / B` limbs of `B`
-/// bits, the least significant first, and a limb at index `limbs.len()` or above reads as `fill`.
+/// significant first, without the length prefix of a slice. For limbs of `B <= 64` bits, each word
+/// joins `64 / B` limbs, the least significant first, and a limb at index `limbs.len()` or above
+/// reads as `fill`. A limb of 128 bits holds two words, the low one first, and `N` such limbs hold
+/// every word of `bits <= 128 * N` bits, so they never read `fill`.
 ///
 /// Every storage of a value of `bits` bits writes the same words, so the hash does not depend on the
 /// limb type or the number of limbs.
-fn hash_words<L: Copy + Into<u64>, H: Hasher>(limbs: &[L], bits: u32, fill: L, state: &mut H) {
-  let per_word = size_of::<u64>() / size_of::<L>();
-  let limb_bits = u64::BITS / per_word as u32;
+fn hash_words<L: Copy + Into<u128>, H: Hasher>(limbs: &[L], bits: u32, fill: L, state: &mut H) {
+  let limb_bits = 8 * size_of::<L>() as u32;
   for word in 0..bits.div_ceil(64) as usize {
-    let mut value = 0;
-    for k in 0..per_word {
-      let limb = limbs.get(word * per_word + k).copied().unwrap_or(fill);
-      value |= limb.into() << (limb_bits * k as u32);
-    }
-    state.write_u64(value);
+    // A 128-bit limb comes first, since `64 / 128` limbs per word would write zero words.
+    let value = if limb_bits == 128 {
+      limbs[word / 2].into() >> (64 * (word % 2))
+    } else {
+      let per_word = (u64::BITS / limb_bits) as usize;
+      let mut value = 0;
+      for k in 0..per_word {
+        let limb = limbs.get(word * per_word + k).copied().unwrap_or(fill);
+        value |= limb.into() << (limb_bits * k as u32);
+      }
+      value
+    };
+    // The low 64 bits: a word of narrower limbs has no others, and the high half of a 128-bit limb
+    // is the next word.
+    state.write_u64(value as u64);
   }
 }
 
