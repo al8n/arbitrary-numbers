@@ -22,5 +22,33 @@ cargo miri setup
 export MIRIFLAGS="-Zmiri-strict-provenance -Zmiri-disable-isolation -Zmiri-symbolic-alignment-check -Zmiri-tree-borrows"
 export RUSTFLAGS="--cfg test_$CONFIG_FLAGS"
 
-cargo miri test --tests --target $TARGET --lib
-
+# Libtest runs each test on a thread of its own, and Miri rarely lets a thread reuse the addresses
+# that another thread freed. On a 32-bit target, the lib tests then use up the address space of one
+# process, so they run in several processes there, each with a fresh address space: one for each
+# group of modules below, and a last one for every test outside the groups.
+if rustc --print cfg --target "$TARGET" | grep -qx 'target_pointer_width="32"'; then
+  filters=(
+    decimal::
+    int::tests::
+    int::half_limbs::
+    int::limbs::
+    int::limbs8::
+    int::limbs16::
+    int::limbs32::
+    int::limbs128::
+    int::signed_limbs::
+    int::signed_limbs8::
+    int::signed_limbs16::
+    int::signed_limbs32::
+    int::signed_limbs128::
+    integer::
+  )
+  skips=()
+  for filter in "${filters[@]}"; do
+    cargo miri test --tests --target "$TARGET" --lib -- "$filter"
+    skips+=(--skip "$filter")
+  done
+  cargo miri test --tests --target "$TARGET" --lib -- "${skips[@]}"
+else
+  cargo miri test --tests --target "$TARGET" --lib
+fi
