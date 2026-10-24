@@ -59,10 +59,11 @@ FEATURES
   iterator that its trait requires shrinking to return.
 - `Uint<Bits, Repr>` and `Int<Bits, Repr>`: integers of any width `Bits`, stored in an array of
   limbs that has at least `Bits` bits, least significant limb first, in two's complement for `Int`:
-  `[u64; N]`, `[u32; N]`, `[u16; N]` or `[u8; N]`. `[u8; N]` has alignment 1 and holds the
-  little-endian bytes of the value on every target. The module `aliases`, re-exported at the crate
-  root, names the widths that fill 64-bit limbs: `u192`, `u256`, `u320`, `u384`, `u448`, `u512`,
-  `u768`, `u1024`, `u2048` and `u4096`, and `i192` to `i4096`.
+  `[u64; N]`, `[u32; N]`, `[u16; N]`, `[u8; N]` or `[u128; N]`. `[u8; N]` has alignment 1 and holds
+  the little-endian bytes of the value on every target, and `[u128; N]` has the layout of an array
+  of `u128` and works on the 64-bit halves of each limb. The module `aliases`, re-exported at the
+  crate root, names the widths that fill 64-bit limbs: `u192`, `u256`, `u320`, `u384`, `u448`,
+  `u512`, `u768`, `u1024`, `u2048` and `u4096`, and `i192` to `i4096`.
   - `const` items and methods: `BITS`, `ZERO`, `MIN` and `MAX`; `from_limbs` for a width that
     fills its limbs, and `checked_from_limbs` for any width, which returns `None` unless the limbs
     hold a value of `Bits` bits; `to_limbs`, `as_limbs` and `is_zero`, plus `is_negative` and

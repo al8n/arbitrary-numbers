@@ -12,9 +12,11 @@
 //! wide storages `u192` through `u512` and `i192` through `i512` hold arrays of 64-bit limbs, least
 //! significant first. Their modules apply `limbs`, the lower layer for `[u64; N]`, and
 //! `signed_limbs`, the upper layer, which reads the array as two's complement. `Uint` and `Int`
-//! also store arrays of narrower limbs, through `limbs8`, `limbs16` and `limbs32` and the upper
-//! layers over them, `signed_limbs8`, `signed_limbs16` and `signed_limbs32`, which `limb_layer!`
-//! generates from the same code as `limbs` and `signed_limbs`.
+//! also store arrays of the other limb types, through `limbs8`, `limbs16`, `limbs32` and `limbs128`
+//! and the upper layers over them, `signed_limbs8`, `signed_limbs16`, `signed_limbs32` and
+//! `signed_limbs128`, which `limb_layer!` generates from the same code as `limbs` and
+//! `signed_limbs`. No native integer has 256 bits, so `half_limbs!` computes the two primitives of
+//! the layer for `u128` from the 64-bit halves of each limb.
 //!
 //! Every storage module provides `const fn`s with the same names and contracts, so storage-specific
 //! code calls them in constant contexts, and storage-generic code reaches them through the sealed

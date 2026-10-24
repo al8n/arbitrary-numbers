@@ -6,7 +6,8 @@
 //! wide storages of [`Decimal`](crate::Decimal), and 768, 1024, 2048 and 4096 bits. A native width,
 //! such as 64 or 128 bits, has no alias, which would shadow the primitive type of the same name.
 //! Any other width is written as the full type, such as `Uint<U200, [u64; 4]>`, and so is every
-//! storage in narrower limbs, such as `Uint<U256, [u8; 32]>`: the other limb types have no alias.
+//! storage in limbs of another type, such as `Uint<U256, [u8; 32]>` or `Uint<U256, [u128; 2]>`: the
+//! other limb types have no alias.
 //!
 //! The crate root re-exports every alias, so `numo::u256` and `numo::aliases::u256` are the same
 //! type.
